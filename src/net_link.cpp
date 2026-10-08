@@ -221,6 +221,13 @@ void NetLink::onUpdate(float dt) {
             if (m_menu) m_menu->onlineFailed();
         }
     }
+    // Joined from the command line (vkm run --players, vkm_runtime --connect): as if from the menu.
+    if (!m_welcomed && !m_connecting && online()) {
+        m_welcomed = true;
+        m_status   = "Joined";
+        sendProfile();
+        if (m_menu) m_menu->onlineJoined();
+    }
     if (m_welcomed && !m_connecting && net().isDisconnected()) {
         const std::string why = net().lastError();
         leave();
