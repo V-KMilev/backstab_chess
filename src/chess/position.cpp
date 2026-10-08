@@ -208,6 +208,11 @@ bool Position::inCheck(Color side) const {
     return king != NO_SQUARE && attacked(king, opposite(side));
 }
 
+Square Position::takenBy(const Move& move) const {
+    if (move.kind == MoveKind::EnPassant) return squareAt(fileOf(move.to), rankOf(move.from));
+    return at(move.to).empty() ? NO_SQUARE : move.to;
+}
+
 void Position::pseudoLegalMoves(std::vector<Move>& out) const {
     const Color us   = m_side;
     const Color them = opposite(us);

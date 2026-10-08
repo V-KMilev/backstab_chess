@@ -33,27 +33,27 @@ void Match::handTo(Color side) {
     m_current = rota.empty() ? -1 : rota[m_next[sideIndex(side)] % rota.size()];
 }
 
+std::optional<Duel> Match::duelFor(const Move& move) const {
+    const int mover = ownerOf(move.from);
+    if (mover >= 0 && mover != m_current) return Duel{m_current, mover, move, DuelKind::Teammate};
+    return captureDuel(m_current, move);
+}
+
+std::optional<Duel> Match::captureDuel(int challenger, const Move& move) const {
+    const Square taken  = m_position.takenBy(move);
+    const int    victim = taken != NO_SQUARE ? ownerOf(taken) : -1;
+    if (victim < 0 || m_position.inCheck(m_position.sideToMove())) return std::nullopt;
+    return Duel{challenger, victim, move, DuelKind::Capture};
+}
+
 Attempt Match::attempt(const Move& move) {
     if (m_duel || over() || m_current < 0) return Attempt::Illegal;
     bool legal = false;
     for (const Move& m : m_position.legalMoves()) legal = legal || m == move;
     if (!legal) return Attempt::Illegal;
 
-    const Color side  = m_position.sideToMove();
-    const int   mover = ownerOf(move.from);
-    Square taken = NO_SQUARE;
-    if (move.kind == MoveKind::EnPassant) taken = squareAt(fileOf(move.to), rankOf(move.from));
-    else if (!m_position.at(move.to).empty()) taken = move.to;
-    const int victim = taken != NO_SQUARE ? ownerOf(taken) : -1;
-
-    if (mover >= 0 && mover != m_current) {
-        m_duel = Duel{m_current, mover, move, DuelKind::Teammate};
-        return Attempt::Duel;
-    }
-    if (victim >= 0 && !m_position.inCheck(side)) {
-        m_duel = Duel{m_current, victim, move, DuelKind::Capture};
-        return Attempt::Duel;
-    }
+    m_duel = duelFor(move);
+    if (m_duel) return Attempt::Duel;
     play(m_current, move);
     return Attempt::Played;
 }
@@ -68,14 +68,8 @@ void Match::resolveDuel(bool challengerWon) {
         m_players[static_cast<size_t>(duel.challenger)].score += Points::DUEL_WON;
         // Won the piece off a teammate to take an enemy's: that owner defends too.
         if (duel.kind == DuelKind::Teammate) {
-            Square taken = NO_SQUARE;
-            if (duel.move.kind == MoveKind::EnPassant) taken = squareAt(fileOf(duel.move.to), rankOf(duel.move.from));
-            else if (!m_position.at(duel.move.to).empty()) taken = duel.move.to;
-            const int victim = taken != NO_SQUARE ? ownerOf(taken) : -1;
-            if (victim >= 0 && !m_position.inCheck(side)) {
-                m_duel = Duel{duel.challenger, victim, duel.move, DuelKind::Capture};
-                return;
-            }
+            m_duel = captureDuel(duel.challenger, duel.move);
+            if (m_duel) return;
         }
         play(duel.challenger, duel.move);
         return;
@@ -94,9 +88,7 @@ void Match::resolveDuel(bool challengerWon) {
 void Match::play(int player, const Move& move) {
     const Color side = m_position.sideToMove();
 
-    Square taken = NO_SQUARE;
-    if (move.kind == MoveKind::EnPassant) taken = squareAt(fileOf(move.to), rankOf(move.from));
-    else if (!m_position.at(move.to).empty()) taken = move.to;
+    const Square taken = m_position.takenBy(move);
     if (taken != NO_SQUARE) {
         m_players[static_cast<size_t>(player)].score += captureValue(m_position.at(taken).type);
         m_owner[static_cast<size_t>(taken)] = -1;

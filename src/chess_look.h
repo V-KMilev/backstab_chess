@@ -38,8 +38,10 @@ MaterialHandle piece(ResourceManager& resources, PieceSet set, Chess::Color side
 
 MaterialHandle board(ResourceManager& resources);   ///< The wooden board, as the set has it.
 MaterialHandle table(ResourceManager& resources);   ///< The lacquered table under it.
+MaterialHandle floor(ResourceManager& resources);   ///< The wet plain the table stands on.
 MaterialHandle hint(ResourceManager& resources);    ///< A square a selected piece may move to.
 MaterialHandle chosen(ResourceManager& resources);  ///< The selected piece's square.
+MaterialHandle duel(ResourceManager& resources);    ///< A square only a duel can reach.
 
 } // namespace ChessLook
 

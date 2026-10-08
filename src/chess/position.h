@@ -102,6 +102,9 @@ class Position {
          */
         bool pass();
 
+        /// Where the piece @p move takes stands: beside its arrival for en passant; NO_SQUARE for none.
+        Square takenBy(const Move& move) const;
+
         /// Whether @p side's king is attacked.
         bool inCheck(Color side) const;
 

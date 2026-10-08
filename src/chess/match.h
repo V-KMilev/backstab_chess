@@ -76,6 +76,9 @@ class Match {
         /// The duel waiting to be settled, if there is one.
         const std::optional<Duel>& duel() const { return m_duel; }
 
+        /// The duel @p move would start if the current player tried it; nothing when it would be played.
+        std::optional<Duel> duelFor(const Move& move) const;
+
         /**
          * @brief The current player plays @p move, or challenges for it.
          *
@@ -95,6 +98,7 @@ class Match {
         bool over() const { return m_position.outcome() != Outcome::Ongoing; }
 
     private:
+        std::optional<Duel> captureDuel(int challenger, const Move& move) const;
         void play(int player, const Move& move);
         void handTo(Color side);
 

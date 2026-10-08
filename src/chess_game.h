@@ -1,12 +1,14 @@
 #pragma once
 
 #include <array>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "system/script/behavior_api.h"
 
 #include "avatar.h"
-#include "chess/position.h"
+#include "chess/match.h"
 #include "chess_look.h"
 
 namespace Game {
@@ -14,11 +16,13 @@ namespace Game {
 using namespace Vkm::Engine;
 
 /**
- * @brief One game of chess on the table: the board, its pieces, and the hand that moves them.
+ * @brief A game of Backstab Chess on the table, played hot-seat: the board, its pieces, every
+ *        player's seat and head, and the hand that moves for whoever's turn it is.
  *
- * Click a piece of the side to move to see where it can go, then a square to move it there.
- * WASD flies round the table, Space and Shift up and down, right-drag looks, F sits back down.
- * Keys 1-4 change what the pieces are made of.
+ * Click a piece to see where it can go, then a square to move it there. A piece wears its
+ * owner's skin and a ring in their colour; reaching for a teammate's piece, or taking an
+ * enemy's, is a duel, settled for now by a coin. WASD flies, Space and Shift go up and down,
+ * right-drag looks, F returns to the seat.
  */
 class ChessGame : public ReflectedBehavior<ChessGame> {
     public:
@@ -26,70 +30,130 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void onUpdate(float dt) override;
 
     public:
-        int   pieceSet    = 0;      ///< A PieceSet.
-        float moveSeconds = 0.45f;  ///< How long a piece takes from one square to the next.
+        int   whitePlayers = 2;
+        int   blackPlayers = 2;
+        float moveSeconds  = 0.45f;  ///< How long a piece takes from one square to the next.
+        float duelSeconds  = 2.0f;   ///< How long a duel's coin spins.
+        float turnSeconds  = 60.0f;  ///< Sunrise to sunset: how long a player has to move.
 
     private:
-        /// A piece gliding to its square, and what it knocks off the board on arrival.
+        /// A piece gliding to its square, or a taken one floating off to its taker's trophies.
         struct Glide {
             EntityId         piece;
             glm::vec3        from;
             glm::vec3        to;
             float            t        = 0.0f;
+            float            seconds  = 0.0f;  ///< How long it takes; 0 for moveSeconds.
             float            lift     = 0.0f;  ///< How high it arcs, in metres; a knight jumps.
-            EntityId         victim;
+            float            spin     = 0.0f;  ///< Radians it turns on the way.
+            glm::quat        facing   = {1.0f, 0.0f, 0.0f, 0.0f};
+            EntityId         victim;           ///< Lifted off on arrival.
+            int              taker    = -1;    ///< Whose trophy the victim becomes.
             Chess::PieceType becomes  = Chess::PieceType::None;
         };
 
-        /// A drawn piece and the side whose material it wears; a bishop is two.
-        struct Drawn {
-            EntityId     entity;
-            Chess::Color side;
+        /// A piece's entities: its body, a bishop's ball, and the ring in its owner's colour.
+        struct DrawnPiece {
+            EntityId     body;
+            EntityId     top;
+            EntityId     ring;
+            Chess::Color side = Chess::Color::White;
+        };
+
+        /// A player's place at the table, and how they look.
+        struct Seat {
+            Avatar*        avatar = nullptr;
+            glm::vec3      eye    = {0.0f, 0.0f, 0.0f};
+            float          yaw    = 0.0f;
+            float          pitch  = 0.0f;
+            glm::vec3      color  = {1.0f, 1.0f, 1.0f};
+            PieceSet       skin   = PieceSet::Classic;
+            MaterialHandle ring;
+        };
+
+        /// A player's line on the scoreboard.
+        struct ScoreRow {
+            EntityId name;
+            EntityId points;
         };
 
     private:
         void spawnTable();
+        void spawnScenery();
+        void spawnPlayers();
         void spawnPieces();
+        void spawnHud();
         EntityId spawnPiece(Chess::Piece piece, Chess::Square square);
-        void setMesh(EntityId entity, Chess::PieceType type);
+        void setMesh(DrawnPiece& drawn, Chess::PieceType type);
+        DrawnPiece* drawnOf(EntityId body);
         glm::vec3 squareCentre(Chess::Square square) const;
         Chess::Square squareUnderPointer();
+        void mark(Chess::Square square, float size, MaterialHandle material);
+
         void click(Chess::Square square);
         void showChoices(Chess::Square square);
         void clearChoices();
-        void play(const Chess::Move& move);
-        void knockOff(EntityId piece, const glm::vec3& from);
+        void tryMove(const Chess::Move& move);
+        void startDuel(const std::string& title);
+        void settleDuel(float dt);
+        void showMove(const Chess::Move& move, const Chess::Position& before);
+        Glide takeAway(EntityId piece, int taker);
         void advanceGlides(float dt);
-        void applySet();
+
+        void updateSun(float dt);
+        void newDay();
+        void timeOut();
+
+        void refreshLooks();
         void updateCamera(float dt);
-        void updateAvatars(float dt);
-        void updateStatus();
+        void updateAvatars();
+        void updateHud(float dt);
+        void showBanner(const std::string& title, const std::string& detail, float seconds);
+        const char* nameOf(int player) const;
 
     private:
-        Chess::Position m_position = Chess::Position::start();
+        std::optional<Chess::Match> m_match;
 
-        std::array<EntityId, 64> m_pieces{};  ///< The piece standing on each square.
-        std::vector<Drawn>       m_drawn;     ///< Every piece entity, captured ones too.
+        std::array<EntityId, 64> m_pieces{};  ///< The body of the piece on each square.
+        std::vector<DrawnPiece>  m_drawn;     ///< Every piece, captured ones too.
+        std::vector<Seat>        m_seats;     ///< One per player, as the match numbers them.
         std::vector<EntityId>    m_hints;
         std::vector<Chess::Move> m_choices;
         std::vector<Glide>       m_glides;
+        std::vector<int>         m_trophies;  ///< How many pieces each player has taken.
         Chess::Square            m_selected = Chess::NO_SQUARE;
-        int                      m_shownSet = -1;
 
-        EntityId  m_status;
-        glm::vec3 m_eye   = {0.0f, 4.6f, -7.0f};
-        float     m_yaw   = glm::pi<float>();
-        float     m_pitch = glm::radians(-25.0f);
+        // The camera is whoever's turn it is, and travels to their seat when that changes.
+        int       m_viewer    = -1;
+        glm::vec3 m_eye       = {0.0f, 4.6f, -7.0f};
+        float     m_yaw       = 0.0f;
+        float     m_pitch     = 0.0f;
+        glm::vec3 m_fromEye   = {0.0f, 4.6f, -7.0f};
+        float     m_fromYaw   = 0.0f;
+        float     m_fromPitch = 0.0f;
+        float     m_travel    = 1.0f;  ///< 0..1 along the way to the viewer's seat.
 
-        Avatar* m_me    = nullptr;
-        Avatar* m_ghost = nullptr;  ///< A demo player until there are real ones.
-        float   m_ghostTime     = 0.0f;
-        int     m_ghostSquare   = 28;
+        float m_duelTime = -1.0f;  ///< Seconds into the waiting duel; below zero while there is none.
+
+        // Each turn is a day: the sun sets when time is up, and rises again for the next player.
+        float m_day     = 0.0f;  ///< 0 at noon, 1 at sunset.
+        float m_dayFrom = 0.0f;  ///< Where the sun was when it began to rise again.
+        float m_sunrise = 1.0f;  ///< 0..1 through the sun's return to noon.
+
+        EntityId              m_status;
+        EntityId              m_banner;
+        EntityId              m_bannerTitle;
+        EntityId              m_bannerDetail;
+        float                 m_bannerTime = 0.0f;  ///< Seconds the banner has left.
+        std::vector<ScoreRow> m_scoreRows;
 };
 
 } // namespace Game
 
 VKM_REFLECT_BEGIN(::Game::ChessGame)
-    VKM_F(pieceSet)
+    VKM_F(whitePlayers)
+    VKM_F(blackPlayers)
     VKM_F(moveSeconds)
+    VKM_F(duelSeconds)
+    VKM_F(turnSeconds)
 VKM_REFLECT_END()

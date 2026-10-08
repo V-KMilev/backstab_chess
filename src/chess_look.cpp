@@ -62,17 +62,20 @@ void build(ResourceManager& resources) {
     // Clear glass, and a smoked glass that darkens with the thickness light crosses.
     MaterialAsset clear;
     clear.type            = MaterialType::Transparent;
-    clear.albedo          = {0.96f, 0.98f, 1.0f, 0.12f};
-    clear.roughness       = 0.02f;
-    clear.transmission    = 1.0f;
-    clear.ior             = 1.5f;
-    clear.thicknessFactor = 0.25f;
+    // Thick, like a paperweight: the body tints what it bends.
+    clear.albedo              = {0.8f, 0.9f, 1.0f, 0.6f};
+    clear.roughness           = 0.03f;
+    clear.transmission        = 0.7f;
+    clear.ior                 = 1.5f;
+    clear.thicknessFactor     = 0.6f;
+    clear.attenuationColor    = {0.55f, 0.78f, 0.95f};
+    clear.attenuationDistance = 0.3f;
     add(resources, clear, pieceName(PieceSet::Glass, Color::White));
 
     MaterialAsset smoked = clear;
-    smoked.albedo              = {0.3f, 0.32f, 0.36f, 0.35f};
-    smoked.attenuationColor    = {0.12f, 0.12f, 0.16f};
-    smoked.attenuationDistance = 0.15f;
+    smoked.albedo              = {0.08f, 0.09f, 0.12f, 0.82f};
+    smoked.attenuationColor    = {0.08f, 0.08f, 0.11f};
+    smoked.attenuationDistance = 0.12f;
     add(resources, smoked, pieceName(PieceSet::Glass, Color::Black));
 
     // Polished gold against a brushed gunmetal.
@@ -112,6 +115,12 @@ void build(ResourceManager& resources) {
     table.clearcoatRoughness = 0.35f;  // satin: the lamp spreads into a sheen, not a second bulb
     add(resources, table, "chess:table");
 
+    // The plain the table stands on: dark and wet, a mirror for the sky.
+    MaterialAsset floor;
+    floor.albedo    = {0.03f, 0.03f, 0.035f, 1.0f};
+    floor.roughness = 0.06f;
+    add(resources, floor, "chess:floor");
+
     // The hints glow faintly through the board's lacquer, rather than sit on it as decals.
     MaterialAsset hint;
     hint.type             = MaterialType::Transparent;
@@ -125,6 +134,11 @@ void build(ResourceManager& resources) {
     chosen.albedo   = {1.0f, 0.72f, 0.3f, 0.45f};
     chosen.emission = {1.0f, 0.72f, 0.3f};
     add(resources, chosen, "chess:chosen");
+
+    MaterialAsset duel = hint;
+    duel.albedo   = {1.0f, 0.22f, 0.2f, 0.45f};
+    duel.emission = {1.0f, 0.22f, 0.2f};
+    add(resources, duel, "chess:duel");
 }
 
 MaterialHandle piece(ResourceManager& resources, PieceSet set, Chess::Color side) {
@@ -135,6 +149,8 @@ MaterialHandle board(ResourceManager& resources)  { return resources.findByName<
 MaterialHandle table(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:table"); }
 MaterialHandle hint(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:hint"); }
 MaterialHandle chosen(ResourceManager& resources) { return resources.findByName<MaterialAsset>("chess:chosen"); }
+MaterialHandle floor(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:floor"); }
+MaterialHandle duel(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:duel"); }
 
 } // namespace ChessLook
 

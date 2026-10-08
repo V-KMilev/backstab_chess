@@ -37,17 +37,27 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
     AssetSerializer::loadAssets(assets, resources);
     Game::ChessLook::build(resources);
 
-    // Night outside, and the room lit by the lamp over the table.
+    // Sunset over a flat, wet plain: the sun low and off to the side, so it rakes across the
+    // board for both colours, through a haze that shows its light.
     Environment& env = scene.environment();
-    env.sky.sunElevation    = -20.0f;
-    env.sky.sunAzimuth      = 140.0f;
-    env.night.moonIntensity = 0.0f;  // no moon low over the table's edge
+    env.sky.sunElevation   = 8.0f;
+    env.sky.sunAzimuth     = 75.0f;
+    env.sky.lightIntensity = 4.0f;
+    env.sky.mie            = 6.0f;
+    env.fog.enabled       = true;
+    env.fog.density       = 0.0025f;
+    env.fog.height        = -7.5f;
+    env.fog.heightFalloff = 0.02f;
+    env.fog.anisotropy    = 0.75f;
+    env.fog.albedo        = {1.0f, 0.92f, 0.82f};
+    env.fog.maxDistance   = 400.0f;
 
     const EntityId sun = scene.createEntity();
     scene.add(sun, makeName("Sun"));
     scene.add(sun, Transform{});
     Light sunLight{};
-    sunLight.type = LightType::Directional;
+    sunLight.type           = LightType::Directional;
+    sunLight.shadowDistance = 40.0f;
     scene.add(sun, sunLight);
 
     const EntityId lamp = scene.createEntity();
@@ -59,7 +69,7 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
     Light lampLight{};
     lampLight.type           = LightType::Spot;
     lampLight.color          = {1.0f, 0.86f, 0.68f};
-    lampLight.intensity      = 160.0f;
+    lampLight.intensity      = 60.0f;
     lampLight.radius         = 20.0f;
     lampLight.innerConeAngle = glm::radians(28.0f);
     lampLight.outerConeAngle = glm::radians(48.0f);
