@@ -137,15 +137,15 @@ TextureAsset walnutColor() {
         const glm::vec3 dark  = {0.22f, 0.12f, 0.065f};
         const glm::vec3 light = {0.42f, 0.25f, 0.13f};
         const float     shade = 0.85f + 0.3f * lattice(static_cast<int>(plankOf(v)), 7, PLANKS, 5u);
-        const float     g     = std::pow(grain(u, v), 2.2f);
+        const float     g     = std::pow(grain(u, v), 3.0f);
         const float     speck = fbm(u * 3.0f, v * 3.0f, 32, 61u, 3);
-        glm::vec3       c     = glm::mix(light, dark, g * 0.75f) * shade * (0.9f + 0.2f * speck);
+        glm::vec3       c     = glm::mix(light, dark, g * 0.5f) * shade * (0.9f + 0.2f * speck);
         return glm::mix(c, c * 0.35f, groove(v));
     });
 }
 
 TextureAsset walnutNormal() {
-    return normalMap([](float u, float v) { return grain(u, v) * 0.12f - groove(v) * 0.8f; }, 2.0f);
+    return normalMap([](float u, float v) { return grain(u, v) * 0.025f - groove(v) * 0.8f; }, 2.0f);
 }
 
 // Foam on the sea: streaks drawn out along the wind (U), broken into patches, lacy within.
@@ -185,9 +185,27 @@ TextureAsset seaSurface() {
             const float f   = foam((x + 0.5f) / SIZE, (y + 0.5f) / SIZE);
             uint8_t*    out = &texture.pixelData[static_cast<size_t>((y * SIZE + x) * 4)];
             out[0] = 255;                              // no occlusion
-            out[1] = byte(glm::mix(0.05f, 0.75f, f));  // glassy water, rough foam
+            out[1] = byte(glm::mix(0.025f, 0.7f, f));  // glassy water, rough foam
             out[2] = 0;                                // not metal
             out[3] = 255;
+        }
+    }
+    return texture;
+}
+
+TextureAsset foamLace() {
+    TextureAsset texture = blank(TextureInternalFormat::SRGBA8, TexturePixelFormat::RGBA, 4);
+    for (int y = 0; y < SIZE; ++y) {
+        for (int x = 0; x < SIZE; ++x) {
+            const float u    = (x + 0.5f) / SIZE;
+            const float v    = (y + 0.5f) / SIZE;
+            // Thickest at the waterline (V's middle), thinning out lacy to either edge.
+            const float band = 1.0f - std::abs(v * 2.0f - 1.0f);
+            const float lace = fbm(u * 6.0f, v, 8, 113u, 5);
+            const float a    = std::clamp((lace * band * 1.6f - 0.35f) * 2.5f, 0.0f, 1.0f);
+            uint8_t*    out  = &texture.pixelData[static_cast<size_t>((y * SIZE + x) * 4)];
+            out[0] = out[1] = out[2] = byte(0.88f);
+            out[3] = byte(a);
         }
     }
     return texture;

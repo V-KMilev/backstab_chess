@@ -12,6 +12,6 @@ constexpr float TABLE_THICKNESS = 0.45f;
 
 // The sea the table stands in, and how far its ripples repeat.
 constexpr float SEA_LEVEL = -4.5f;
-constexpr float SEA_TILE  = 26.0f;
+constexpr float SEA_TILE  = 18.0f;
 
 } // namespace Game

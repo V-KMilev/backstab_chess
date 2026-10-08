@@ -3,6 +3,7 @@
 #include "chess_game.h"
 
 #include "dial.h"
+#include "shapes.h"
 #include "world.h"
 
 #include <algorithm>
@@ -113,26 +114,6 @@ const char* pieceName(PieceType type) {
 
 const char* sideName(Color side) { return side == Color::White ? "White" : "Black"; }
 
-// A flat ring facing up, 1 across its outer edge's radius, for the mark under an owned piece.
-MeshAsset ringMesh(float inner, uint32_t segments) {
-    MeshAsset       mesh;
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
-    const glm::vec4 tangent(1.0f, 0.0f, 0.0f, -1.0f);
-    for (uint32_t i = 0; i <= segments; ++i) {
-        const float u = static_cast<float>(i) / static_cast<float>(segments);
-        const float c = std::cos(u * glm::two_pi<float>());
-        const float s = std::sin(u * glm::two_pi<float>());
-        mesh.vertices.push_back({{c * inner, 0.0f, s * inner}, up, {u, 0.0f}, tangent});
-        mesh.vertices.push_back({{c, 0.0f, s}, up, {u, 1.0f}, tangent});
-    }
-    for (uint32_t i = 0; i < segments; ++i) {
-        const uint32_t a = i * 2;  // inner, then outer, then the next pair
-        mesh.indices.insert(mesh.indices.end(), {a, a + 2, a + 3, a, a + 3, a + 1});
-    }
-    mesh.boundsMin = {-1.0f, -0.001f, -1.0f};
-    mesh.boundsMax = {1.0f, 0.001f, 1.0f};
-    return mesh;
-}
 
 // Overshoots past 1 and settles back, for a pop.
 float backOut(float t) {
@@ -158,7 +139,7 @@ void ChessGame::onStart() {
     for (const Fly& fly : FLY) map.define(fly.action, {InputBinding{InputSource::Key, fly.key, 1.0f}});
 
     resources().add(generateCylinder(0.5f, 1.0f, 40), "chess:disc");
-    resources().add(ringMesh(0.72f, 48), "chess:ring");
+    resources().add(Shapes::ring(0.72f, 48), "chess:ring");
 
     spawnTable();
     spawnPieces();

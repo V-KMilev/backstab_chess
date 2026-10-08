@@ -26,4 +26,7 @@ TextureAsset seaColor();
 /// Its occlusion, roughness and metal, packed: glassy water, rough foam.
 TextureAsset seaSurface();
 
+/// Foam round something afloat, for a ring: lacy, its alpha thickest along V's middle.
+TextureAsset foamLace();
+
 } // namespace Game::Textures

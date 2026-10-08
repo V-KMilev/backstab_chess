@@ -12,6 +12,7 @@
 
 #include "chess_look.h"
 #include "sea.h"
+#include "shapes.h"
 #include "world.h"
 
 namespace Game {
@@ -83,6 +84,7 @@ void Scenery::onStart() {
     res.add(generateCylinder(0.5f, 1.0f, 96), "scenery:drum");
     res.add(generateSphere(32, 16), "scenery:ball");
     res.add(generateCube(), "scenery:block");
+    res.add(Shapes::ring(0.45f, 48), "scenery:foam_ring");
     m_swell = res.add(Sea::mesh(m_swellRest), "scenery:swell");
 
     spawnTable();
@@ -106,6 +108,14 @@ void Scenery::onUpdate(float dt) {
             at.y += Sea::height(at.x, at.z, m_time);
             lean = tilt(Sea::normal(at.x, at.z, m_time));
         }
+        if (d.foam) {
+            if (Transform* f = scene().tryGet<Transform>(d.foam)) {
+                const float breathe = 1.0f + 0.06f * std::sin(wave * 1.7f);
+                f->position = {at.x, SEA_LEVEL + Sea::height(at.x, at.z, m_time) + 0.02f, at.z};
+                f->rotation = lean * glm::angleAxis(m_time * 0.05f + d.phase, up);
+                f->scale    = {d.foamRadius * breathe, 1.0f, d.foamRadius * breathe};
+            }
+        }
         t->position = at;
         t->rotation = lean * round * glm::angleAxis(d.rock * std::sin(wave * 0.8f + 1.3f), d.rockAxis)
             * glm::angleAxis(d.spin * m_time, d.spinAxis) * d.facing;
@@ -117,6 +127,14 @@ void Scenery::onUpdate(float dt) {
         resources().commit(m_swell);
     }
 
+}
+
+// A ring of foam at @p d's waterline, @p radius out, riding the swell with it.
+void Scenery::addFoam(Drifter& d, float radius) {
+    ResourceManager& res = resources();
+    d.foam       = place("Foam", res.findByName<MeshAsset>("scenery:foam_ring"), ChessLook::foam(res), d.at,
+                         {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(radius, 1.0f, radius), false);
+    d.foamRadius = radius;
 }
 
 EntityId Scenery::place(const char* name, MeshHandle mesh, MaterialHandle material, const glm::vec3& at,
@@ -145,6 +163,14 @@ void Scenery::spawnTable() {
     const float top    = -TABLE_THICKNESS - 0.5f;
     const float bottom = SEA_LEVEL - 3.0f;
     place("Table Column", drum, walnut, {0.0f, (top + bottom) * 0.5f, 0.0f}, upright, {1.5f, top - bottom, 1.5f});
+
+    // Foam where the column stands in the sea, riding the swell round it.
+    Drifter foam;
+    foam.at     = {0.0f, SEA_LEVEL + 0.02f, 0.0f};
+    foam.id     = place("Column Foam", res.findByName<MeshAsset>("scenery:foam_ring"), ChessLook::foam(res), foam.at, upright,
+                        {1.6f, 1.0f, 1.6f}, false);
+    foam.afloat = true;
+    m_drifters.push_back(foam);
 }
 
 // Lanterns: small chess pieces of glowing glass, scattered round the table at every height and
@@ -241,6 +267,7 @@ void Scenery::spawnFlotsam() {
         d.at     = at;
         d.facing = facing;
         d.swirl  = SWIRL;
+        if (d.afloat && d.foamRadius > 0.0f) addFoam(d, d.foamRadius);
         m_drifters.push_back(d);
     };
     const auto rocking = [&](float low, float high) {
@@ -282,7 +309,9 @@ void Scenery::spawnFlotsam() {
         }
         const std::optional<glm::vec2> spot = findSpot(far, room);
         if (!spot) continue;
-        spawnPiece(type, {spot->x, SEA_LEVEL - sink, spot->y}, facing, scale, rocking(3.0f, 10.0f));
+        Drifter d = rocking(3.0f, 10.0f);
+        d.foamRadius = room.radius * 0.9f;
+        spawnPiece(type, {spot->x, SEA_LEVEL - sink, spot->y}, facing, scale, d);
     }
 
     // Squares of board afloat among them, white marble and black, one at a time.
@@ -299,6 +328,7 @@ void Scenery::spawnFlotsam() {
         d.at     = at;
         d.facing = tilt;
         d.swirl  = SWIRL;
+        addFoam(d, size * 0.85f);
         m_drifters.push_back(d);
     }
 

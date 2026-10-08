@@ -16,7 +16,7 @@ constexpr int   RINGS     = 120;      ///< Out to NEAR_RADIUS, close together at
 constexpr int   FAR_RINGS = 12;       ///< Beyond it, flat, out to the horizon.
 constexpr float HORIZON   = 1200.0f;
 constexpr int   SEGMENTS  = 256;
-constexpr float STEEPNESS = 0.45f;    ///< How far the crests lean together: 0 is a sine, 1 a cusp.
+constexpr float STEEPNESS = 0.6f;     ///< How far the crests lean together: 0 is a sine, 1 a cusp.
 constexpr float GRAVITY   = 9.81f;
 constexpr float CALM      = 150.0f;   ///< Where the swell begins to die away toward NEAR_RADIUS.
 
@@ -29,12 +29,16 @@ struct Wave {
 
 // Long rollers down to short chop, from a spread of headings round the wind's; the ripples'
 // normal map carries everything shorter.
+// A gentle swell under a short chop from round the wind's heading: the chop is most of what an
+// eye at a table sees of a sea.
 const Wave WAVES[] = {
-    {0.90f, 80.0f, 20.0f, 0.0f},
-    {0.55f, 52.0f, -15.0f, 1.9f},
-    {0.32f, 33.0f, 55.0f, 4.1f},
-    {0.18f, 21.0f, -40.0f, 2.6f},
-    {0.10f, 13.0f, 85.0f, 5.3f},
+    {0.40f, 90.0f, 20.0f, 0.0f},
+    {0.26f, 55.0f, -15.0f, 1.9f},
+    {0.20f, 23.0f, 40.0f, 4.1f},
+    {0.15f, 15.0f, -5.0f, 2.6f},
+    {0.11f, 9.5f, 65.0f, 5.3f},
+    {0.08f, 6.5f, -35.0f, 0.8f},
+    {0.05f, 4.5f, 15.0f, 3.7f},
 };
 constexpr size_t COUNT = std::size(WAVES);
 
@@ -71,7 +75,7 @@ float strength(float r) {
 // How much of a wave @p wavelength long to draw this far out: short chop fades with distance,
 // where the rings are too far apart to hold it and it would only shimmer.
 float detail(float wavelength, float r) {
-    const float reach = wavelength * 7.0f;
+    const float reach = wavelength * 9.0f;
     return 1.0f - std::fmin(std::fmax((r - reach) / reach, 0.0f), 1.0f);
 }
 

@@ -227,6 +227,13 @@ void build(ResourceManager& resources) {
         add(resources, tile, white ? "chess:tile_white" : "chess:tile_black");
     }
 
+    // The foam where something afloat meets the water.
+    MaterialAsset foam;
+    foam.type          = MaterialType::Transparent;
+    foam.albedoTexture = resources.add(Textures::foamLace(), "chess:foam_lace");
+    foam.roughness     = 0.7f;
+    add(resources, foam, "chess:foam");
+
     MaterialAsset brass;
     brass.albedo    = {0.86f, 0.64f, 0.32f, 1.0f};
     brass.metallic  = 1.0f;
@@ -277,6 +284,7 @@ MaterialHandle table(ResourceManager& resources)  { return resources.findByName<
 MaterialHandle hint(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:hint"); }
 MaterialHandle chosen(ResourceManager& resources) { return resources.findByName<MaterialAsset>("chess:chosen"); }
 MaterialHandle sea(ResourceManager& resources)    { return resources.findByName<MaterialAsset>("chess:sea"); }
+MaterialHandle foam(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:foam"); }
 MaterialHandle tile(ResourceManager& resources, bool white) {
     return resources.findByName<MaterialAsset>(white ? "chess:tile_white" : "chess:tile_black");
 }

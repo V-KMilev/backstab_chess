@@ -37,6 +37,8 @@ class Scenery : public ReflectedBehavior<Scenery> {
             float     phase    = 0.0f;
             float     swirl    = 0.0f;  ///< Radians a second it circles the table.
             bool      afloat   = false; ///< Rides the swell: rises, falls and tilts with it.
+            EntityId  foam;                 ///< The ring of foam at its waterline, afloat.
+            float     foamRadius = 0.0f;
         };
 
     private:
@@ -44,6 +46,7 @@ class Scenery : public ReflectedBehavior<Scenery> {
         void spawnLanterns();
         void spawnSea();
         void spawnFlotsam();
+        void addFoam(Drifter& d, float radius);
         EntityId place(const char* name, MeshHandle mesh, MaterialHandle material, const glm::vec3& at,
                        const glm::quat& facing, const glm::vec3& scale, bool shadows = true);
 
