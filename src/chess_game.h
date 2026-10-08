@@ -16,6 +16,16 @@ namespace Game {
 
 using namespace Vkm::Engine;
 
+/// A player as the lobby sets them up: who, which side, and how their pieces look.
+struct PlayerSetup {
+    std::string  name;
+    Chess::Color side  = Chess::Color::White;
+    glm::vec3    color = {1.0f, 1.0f, 1.0f};
+    PieceSet     skin  = PieceSet::Metal;
+    TakeStyle    takes = TakeStyle::Float;
+    bool         local = false;  ///< The player at this screen.
+};
+
 /**
  * @brief A game of Backstab Chess on the table, played hot-seat: the board, its pieces, every
  *        player's seat and head, and the hand that moves for whoever's turn it is.
@@ -30,12 +40,19 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void onStart() override;
         void onUpdate(float dt) override;
 
+        /// Seats the players and puts their heads round the table; until begin(), again as they change.
+        void setPlayers(const std::vector<PlayerSetup>& players);
+
+        /// Starts the match with the players set, white's first to move.
+        void begin();
+
+        bool started() const { return m_match.has_value(); }
+
     public:
-        int   whitePlayers = 2;
-        int   blackPlayers = 2;
         float moveSeconds  = 0.45f;  ///< How long a piece takes from one square to the next.
         float duelSeconds  = 2.0f;   ///< How long a duel's coin spins.
         float turnSeconds  = 60.0f;  ///< A day or a night: how long a player has to move.
+        bool  debugBots    = true;   ///< Play the other seats with a bot, to test alone until there is a network.
 
     private:
         /// A piece gliding to its square, and what it takes on the way.
@@ -72,6 +89,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         /// A player's place at the table, and how they look.
         struct Seat {
             Avatar*        avatar = nullptr;
+            EntityId       head;    ///< The avatar's entity, to remove it by.
             glm::vec3      eye    = {0.0f, 0.0f, 0.0f};
             float          yaw    = 0.0f;
             float          pitch  = 0.0f;
@@ -107,6 +125,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void mark(Chess::Square square, float size, MaterialHandle material);
 
         void click(Chess::Square square);
+        void playBot(float dt);
         void showChoices(Chess::Square square);
         void clearChoices();
         void tryMove(const Chess::Move& move);
@@ -120,7 +139,9 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         glm::vec3 trophySpot(int taker);
         bool settled() const;
 
+        void attract(float dt);
         void updateSun(float dt);
+        void applySun();
         void newTurn();
         void timeOut();
 
@@ -134,6 +155,8 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
     private:
         std::optional<Chess::Match> m_match;
+        std::vector<PlayerSetup>    m_setups;
+        float                       m_orbit = 0.0f;  ///< Round the table, before the match.
 
         std::array<EntityId, 64> m_pieces{};  ///< The body of the piece on each square.
         std::vector<DrawnPiece>  m_drawn;     ///< Every piece, captured ones too.
@@ -145,8 +168,12 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         std::vector<int>         m_trophies;  ///< How many pieces each player has taken.
         Chess::Square            m_selected = Chess::NO_SQUARE;
 
-        // The camera is whoever's turn it is, and travels to their seat when that changes.
+        // The camera is the local player's, from their seat; it travels there once, as the match
+        // begins.
         int       m_viewer    = -1;
+        // A debugging bot's move, chosen as its turn begins and played after a moment's thought.
+        std::optional<Chess::Move> m_botMove;
+        float                      m_botTime = 0.0f;
         glm::vec3 m_eye       = {0.0f, 4.6f, -7.0f};
         float     m_yaw       = 0.0f;
         float     m_pitch     = 0.0f;
@@ -162,22 +189,16 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         float    m_sun        = 0.0f;
         float    m_turnStart  = 0.0f;  ///< Where this turn's sun began.
         float    m_turnEnd    = 0.0f;  ///< Where it ends it.
-        float    m_blink      = 1.0f;  ///< 0..1 through the blink the sun jumps to this turn in.
-        EntityId m_fade;               ///< What the screen dips to for it.
+        float    m_lapseFrom  = 0.0f;  ///< Where the sun was when it raced on to this turn.
+        float    m_lapse      = 1.0f;  ///< 0..1 through that time-lapse.
+        float    m_lapseTime  = 1.0f;  ///< Its length, in seconds: a whole night passes slower.
         EntityId m_lamp;
 
-        /// A mark on the dial's faces, where it sits with the sun's half on top.
-        struct DialMark {
-            EntityId  id;
-            glm::vec2 at;
-            float     size = 0.0f;
-        };
-
-        // The turn card: a disc, half a sun's face and half a moon's, that turns half round
-        // through each turn; the seconds left in its hub, and beside it whose move it is.
-        std::vector<EntityId> m_dialStrips;  ///< Two a row: the left part and the right.
-        std::vector<DialMark> m_dialMarks;
-        EntityId              m_dialRim;
+        // The turn card: a disc, half a sun's face and half a moon's, painted afresh as it turns
+        // half round through each turn; the seconds left in its hub, and beside it whose move
+        // it is.
+        TextureHandle         m_dialFace;
+        float                 m_dialPainted = -1000.0f;  ///< The turn it was last painted at.
         EntityId              m_clockSeconds;
         EntityId              m_turnName;
         EntityId              m_turnDetail;
@@ -196,9 +217,8 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 } // namespace Game
 
 VKM_REFLECT_BEGIN(::Game::ChessGame)
-    VKM_F(whitePlayers)
-    VKM_F(blackPlayers)
     VKM_F(moveSeconds)
     VKM_F(duelSeconds)
     VKM_F(turnSeconds)
+    VKM_F(debugBots)
 VKM_REFLECT_END()

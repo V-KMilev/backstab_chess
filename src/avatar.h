@@ -21,6 +21,7 @@ class Avatar : public ReflectedBehavior<Avatar> {
     public:
         void onStart() override;
         void onUpdate(float dt) override;
+        void onDestroy() override;
 
         /// Where the head should float, and which way it looks.
         void setPose(const glm::vec3& position, const glm::quat& facing);

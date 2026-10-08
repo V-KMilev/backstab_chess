@@ -39,7 +39,7 @@ MaterialHandle piece(ResourceManager& resources, PieceSet set, Chess::Color side
 MaterialHandle board(ResourceManager& resources);   ///< The wooden board, as the set has it.
 MaterialHandle table(ResourceManager& resources);   ///< The lacquered table under it.
 MaterialHandle sea(ResourceManager& resources);     ///< The sea the table stands in.
-MaterialHandle wreck(ResourceManager& resources);   ///< Chunks of chessboard afloat on it.
+MaterialHandle tile(ResourceManager& resources, bool white);  ///< A board's square adrift on it.
 MaterialHandle brass(ResourceManager& resources);   ///< The table's rim and foot.
 MaterialHandle glow(ResourceManager& resources);       ///< The ring glowing under the table's rim.
 MaterialHandle lantern(ResourceManager& resources);    ///< The lanterns adrift round the table.

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <iterator>
+#include <optional>
 
 #include "core/math/random.h"
 #include "ecs/component/render/light.h"
@@ -10,6 +11,7 @@
 #include "resource/generate/mesh_generators.h"
 
 #include "chess_look.h"
+#include "sea.h"
 #include "world.h"
 
 namespace Game {
@@ -20,8 +22,26 @@ using Chess::Color;
 using Chess::PieceType;
 
 constexpr uint64_t SEED     = 0xBAC5AB;  ///< The world's layout; every game has the same one.
-constexpr int      LANTERNS = 9;
-constexpr float    CLEAR    = 10.0f;     ///< Nothing afloat comes nearer the table's middle.
+constexpr int      LANTERNS = 12;
+constexpr float    CLEAR    = 16.0f;     ///< Nothing afloat comes nearer the table's middle.
+constexpr float    SWIRL    = 0.008f;    ///< Radians a second the flotsam circles the table, all as one.
+
+// The room something takes: a circle on the plane and the heights it spans. Two that do not
+// overlap never will, as everything turns round the table together.
+struct Footprint {
+    glm::vec2 at;
+    float     radius;
+    float     low;
+    float     high;
+};
+
+bool clear(const std::vector<Footprint>& taken, const Footprint& f) {
+    for (const Footprint& o : taken) {
+        const bool level = f.low < o.high && o.low < f.high;
+        if (level && glm::length(f.at - o.at) < (f.radius + o.radius) * 1.15f) return false;
+    }
+    return true;
+}
 
 // A piece's height and radius, life size, for floating it at its waterline.
 struct Build {
@@ -40,27 +60,16 @@ Build buildOf(PieceType type) {
     }
 }
 
-// A flat square facing up, @p size across, its UVs repeating every @p tile metres.
-MeshAsset seaMesh(float size, float tile) {
-    MeshAsset       mesh;
-    const float     h  = size * 0.5f;
-    const float     uv = h / tile;
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
-    const glm::vec4 tangent(1.0f, 0.0f, 0.0f, -1.0f);
-    mesh.vertices = {
-        {{-h, 0.0f, -h}, up, {-uv, -uv}, tangent},
-        {{h, 0.0f, -h}, up, {uv, -uv}, tangent},
-        {{h, 0.0f, h}, up, {uv, uv}, tangent},
-        {{-h, 0.0f, h}, up, {-uv, uv}, tangent},
-    };
-    mesh.indices   = {0, 2, 1, 0, 3, 2};
-    mesh.boundsMin = {-h, -0.01f, -h};
-    mesh.boundsMax = {h, 0.01f, h};
-    return mesh;
-}
-
 // A direction in the horizontal plane, @p angle round from +Z toward +X.
 glm::vec3 round(float angle) { return {std::sin(angle), 0.0f, std::cos(angle)}; }
+
+// The turn that tips +Y onto @p normal.
+glm::quat tilt(const glm::vec3& normal) {
+    const glm::vec3 axis = glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal);
+    const float     s    = glm::length(axis);
+    if (s < 1e-6f) return {1.0f, 0.0f, 0.0f, 0.0f};
+    return glm::angleAxis(std::atan2(s, normal.y), axis / s);
+}
 
 // A random unit vector, a little biased up so nothing turns about a level axis only.
 glm::vec3 anyAxis(Math::Rng& rng) {
@@ -74,7 +83,7 @@ void Scenery::onStart() {
     res.add(generateCylinder(0.5f, 1.0f, 96), "scenery:drum");
     res.add(generateSphere(32, 16), "scenery:ball");
     res.add(generateCube(), "scenery:block");
-    res.add(seaMesh(SEA_SIZE, SEA_TILE), "scenery:sea");
+    m_swell = res.add(Sea::mesh(m_swellRest), "scenery:swell");
 
     spawnTable();
     spawnLanterns();
@@ -90,16 +99,24 @@ void Scenery::onUpdate(float dt) {
         if (!t) continue;
         const float     wave  = m_time * d.rate + d.phase;
         const glm::quat round = glm::angleAxis(d.swirl * m_time, up);
-        t->position = round * d.at + up * (d.bob * std::sin(wave));
-        t->rotation = round * glm::angleAxis(d.rock * std::sin(wave * 0.8f + 1.3f), d.rockAxis)
+        glm::vec3       at    = round * d.at + up * (d.bob * std::sin(wave));
+        glm::quat       lean  = {1.0f, 0.0f, 0.0f, 0.0f};
+        if (d.afloat) {
+            // Lifted and tipped by the swell under it.
+            at.y += Sea::height(at.x, at.z, m_time);
+            lean = tilt(Sea::normal(at.x, at.z, m_time));
+        }
+        t->position = at;
+        t->rotation = lean * round * glm::angleAxis(d.rock * std::sin(wave * 0.8f + 1.3f), d.rockAxis)
             * glm::angleAxis(d.spin * m_time, d.spinAxis) * d.facing;
     }
 
-    // The sea slides on under its own ripples, a tile at a time so it never jumps.
-    if (Transform* sea = scene().tryGet<Transform>(m_sea)) {
-        sea->position.x = std::fmod(m_time * 0.7f, SEA_TILE);
-        sea->position.z = std::fmod(m_time * 0.4f, SEA_TILE);
+    // The near sea rolls on.
+    if (MeshAsset* swell = resources().tryEdit(m_swell)) {
+        Sea::shape(*swell, m_swellRest, m_time, SEA_TILE);
+        resources().commit(m_swell);
     }
+
 }
 
 EntityId Scenery::place(const char* name, MeshHandle mesh, MaterialHandle material, const glm::vec3& at,
@@ -130,30 +147,48 @@ void Scenery::spawnTable() {
     place("Table Column", drum, walnut, {0.0f, (top + bottom) * 0.5f, 0.0f}, upright, {1.5f, top - bottom, 1.5f});
 }
 
-// Lanterns adrift round the table, warm, each lighting what is near it: the table's edge, the
+// Lanterns: small chess pieces of glowing glass, scattered round the table at every height and
+// turning slowly as they hang there, each lighting what is near it - the table's edge, the
 // heads, the board's rim. They show little by day and carry the night.
 void Scenery::spawnLanterns() {
-    ResourceManager& res  = resources();
-    const MeshHandle ball = res.findByName<MeshAsset>("scenery:ball");
+    ResourceManager& res = resources();
     Math::Rng        rng(SEED, 3);
+    const PieceType  TYPES[] = {PieceType::Pawn, PieceType::Knight, PieceType::Bishop, PieceType::Rook, PieceType::Queen, PieceType::King};
     for (int i = 0; i < LANTERNS; ++i) {
-        const float     a  = glm::two_pi<float>() * (static_cast<float>(i) + rng.nextFloat(-0.3f, 0.3f)) / static_cast<float>(LANTERNS);
-        const glm::vec3 at = round(a) * rng.nextFloat(8.5f, 12.0f) + glm::vec3(0.0f, rng.nextFloat(1.5f, 5.5f), 0.0f);
-        const EntityId  id = place("Lantern", ball, ChessLook::lantern(res), at, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(0.32f), false);
+        const PieceType type  = TYPES[static_cast<size_t>(i) % std::size(TYPES)];
+        const float     a     = glm::two_pi<float>() * (static_cast<float>(i) + rng.nextFloat(-0.45f, 0.45f)) / static_cast<float>(LANTERNS);
+        const glm::vec3 at    = round(a) * rng.nextFloat(7.5f, 13.0f) + glm::vec3(0.0f, rng.nextFloat(0.8f, 6.5f), 0.0f);
+        const glm::quat tilt  = glm::angleAxis(glm::radians(rng.nextFloat(-35.0f, 35.0f)), anyAxis(rng));
+        const float     scale = rng.nextFloat(9.0f, 14.0f);
+        const EntityId  id    = place("Lantern", res.findByName<MeshAsset>(ChessLook::pieceMesh(type)), ChessLook::lantern(res), at, tilt,
+                                      glm::vec3(scale), false);
+        if (type == PieceType::Bishop) {
+            const EntityId top = spawn("Lantern Top", id);
+            scene().add(top, Transform{});
+            Mesh ball{res.findByName<MeshAsset>("chess:bishop_top"), ChessLook::lantern(res)};
+            ball.castShadows = false;
+            scene().add(top, std::move(ball));
+        }
+        // The light at the piece's heart, half its height up.
+        const EntityId heart = spawn("Lantern Light", id);
+        scene().add(heart, Transform{{0.0f, buildOf(type).height * 0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f / scale)});
         Light light{};
         light.type        = LightType::Point;
         light.color       = {1.0f, 0.72f, 0.4f};
-        light.intensity   = 9.0f;
+        light.intensity   = 8.0f;
         light.radius      = 9.0f;
         light.castShadows = false;
-        scene().add(id, light);
+        scene().add(heart, light);
 
         Drifter d;
-        d.id    = id;
-        d.at    = at;
-        d.bob   = rng.nextFloat(0.3f, 0.8f);
-        d.phase = rng.nextFloat(0.0f, glm::two_pi<float>());
-        d.swirl = 0.03f;
+        d.id       = id;
+        d.at       = at;
+        d.facing   = tilt;
+        d.spin     = rng.nextFloat(0.15f, 0.4f) * (rng.nextBool() ? 1.0f : -1.0f);
+        d.bob      = rng.nextFloat(0.25f, 0.7f);
+        d.rate     = rng.nextFloat(0.4f, 0.8f);
+        d.phase    = rng.nextFloat(0.0f, glm::two_pi<float>());
+        d.swirl    = 0.02f;
         m_drifters.push_back(d);
     }
 }
@@ -161,25 +196,38 @@ void Scenery::spawnLanterns() {
 // The sea, to the horizon, under ripples that slide slowly on.
 void Scenery::spawnSea() {
     ResourceManager& res = resources();
-    m_sea = place("Sea", res.findByName<MeshAsset>("scenery:sea"), ChessLook::sea(res), {0.0f, SEA_LEVEL, 0.0f},
-                  {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f), false);
+    place("Swell", m_swell, ChessLook::sea(res), {0.0f, SEA_LEVEL, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f), false);
 }
 
 // The wreck of a thousand games: pieces of every size and set afloat, lying, leaning or bobbing
-// upright at their waterline, chunks of board among them, all swirling slowly round the table;
-// and some flung up into the air, turning over as they hang there.
+// upright at their waterline, squares of board among them, all circling the table together;
+// and some flung up into the air, turning over as they hang there. Each is set only where it
+// clears all the others.
 void Scenery::spawnFlotsam() {
     ResourceManager& res   = resources();
     const MeshHandle block = res.findByName<MeshAsset>("scenery:block");
     Math::Rng        rng(SEED, 1);
     const PieceType  TYPES[] = {PieceType::Pawn, PieceType::Pawn, PieceType::Pawn, PieceType::Pawn, PieceType::Knight,
                                 PieceType::Knight, PieceType::Bishop, PieceType::Rook, PieceType::Rook, PieceType::Queen, PieceType::King};
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::vec3        up(0.0f, 1.0f, 0.0f);
+    std::vector<Footprint> taken;
+    taken.push_back({{0.0f, 0.0f}, 15.0f, -1000.0f, 1000.0f});  // the table and its lanterns
 
-    const auto piece = [&](const glm::vec3& at, const glm::quat& facing, float scale, Drifter d) {
-        const PieceType type = TYPES[rng.nextInt(0, static_cast<int>(std::size(TYPES)) - 1)];
-        const float     roll = rng.nextFloat();
-        const PieceSet  set  = roll < 0.4f ? PieceSet::Stone : roll < 0.7f ? PieceSet::Classic : roll < 0.88f ? PieceSet::Metal : PieceSet::Glass;
+    // A spot this far out that @p room fits at, if one turns up in a few tries.
+    const auto findSpot = [&](float far, Footprint room) -> std::optional<glm::vec2> {
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            const glm::vec3 p = round(rng.nextFloat(0.0f, glm::two_pi<float>())) * far;
+            room.at = {p.x, p.z};
+            if (clear(taken, room)) {
+                taken.push_back(room);
+                return room.at;
+            }
+        }
+        return std::nullopt;
+    };
+    const auto spawnPiece = [&](PieceType type, const glm::vec3& at, const glm::quat& facing, float scale, Drifter d) {
+        const float          roll = rng.nextFloat();
+        const PieceSet       set  = roll < 0.4f ? PieceSet::Stone : roll < 0.7f ? PieceSet::Classic : roll < 0.88f ? PieceSet::Metal : PieceSet::Glass;
         const MaterialHandle material = ChessLook::piece(res, set, rng.nextBool() ? Color::White : Color::Black);
         const EntityId id = place("Flotsam", res.findByName<MeshAsset>(ChessLook::pieceMesh(type)), material, at, facing, glm::vec3(scale), false);
         if (type == PieceType::Bishop) {
@@ -192,82 +240,95 @@ void Scenery::spawnFlotsam() {
         d.id     = id;
         d.at     = at;
         d.facing = facing;
+        d.swirl  = SWIRL;
         m_drifters.push_back(d);
-        return type;
+    };
+    const auto rocking = [&](float low, float high) {
+        Drifter d;
+        d.rockAxis = round(rng.nextFloat(0.0f, glm::two_pi<float>()));
+        d.rock     = glm::radians(rng.nextFloat(low, high));
+        d.rate     = rng.nextFloat(0.35f, 0.8f);
+        d.phase    = rng.nextFloat(0.0f, glm::two_pi<float>());
+        d.afloat   = true;
+        return d;
     };
 
     // Afloat: the nearer, the smaller, so nothing looms over the table.
     for (int i = 0; i < 150; ++i) {
-        const float far   = CLEAR + std::pow(rng.nextFloat(), 1.6f) * 420.0f;
-        const float scale = std::max(far * rng.nextFloat(0.8f, 3.5f), 12.0f);
-        const float yaw   = rng.nextFloat(0.0f, glm::two_pi<float>());
-        const float lying = rng.nextFloat();
-        Drifter d;
-        d.rockAxis = round(rng.nextFloat(0.0f, glm::two_pi<float>()));
-        d.rock     = glm::radians(rng.nextFloat(3.0f, 10.0f));
-        d.rate     = rng.nextFloat(0.35f, 0.8f);
-        d.phase    = rng.nextFloat(0.0f, glm::two_pi<float>());
-        d.swirl    = rng.nextFloat(0.004f, 0.012f) * (far < 120.0f ? 1.0f : 0.5f);
-        glm::vec3 at = round(rng.nextFloat(0.0f, glm::two_pi<float>())) * far + glm::vec3(0.0f, SEA_LEVEL, 0.0f);
+        const PieceType type  = TYPES[rng.nextInt(0, static_cast<int>(std::size(TYPES)) - 1)];
+        const Build     build = buildOf(type);
+        const float     far   = CLEAR + std::pow(rng.nextFloat(), 1.6f) * 420.0f;
+        const float     scale = std::max(far * rng.nextFloat(0.8f, 3.5f), 12.0f);
+        const float     yaw   = rng.nextFloat(0.0f, glm::two_pi<float>());
+        const float     pose  = rng.nextFloat();
+        const float     tall  = build.height * scale;
+        const float     wide  = build.radius * scale;
+
         glm::quat facing = glm::angleAxis(yaw, up);
-        // A rough guess at the piece's size: a king's, so the tall ones float a little high.
-        const Build size = buildOf(PieceType::King);
-        if (lying < 0.55f) {
-            facing = glm::angleAxis(glm::radians(rng.nextFloat(80.0f, 100.0f)), round(yaw)) * facing;  // on its side
-            at.y  -= size.radius * scale * 0.2f;
-        } else if (lying < 0.85f) {
-            facing = glm::angleAxis(glm::radians(rng.nextFloat(15.0f, 50.0f)), round(yaw)) * facing;   // leaning
-            at.y  -= size.height * scale * rng.nextFloat(0.2f, 0.5f);
+        float     sink   = 0.0f;
+        Footprint room{{}, wide * 1.3f, SEA_LEVEL - 2.0f, SEA_LEVEL + tall};
+        if (pose < 0.55f) {
+            const float lean = glm::radians(rng.nextFloat(80.0f, 100.0f));  // on its side
+            facing = glm::angleAxis(lean, round(yaw)) * facing;
+            sink   = wide * 0.2f;
+            room   = {{}, tall * 0.55f + wide, SEA_LEVEL - wide, SEA_LEVEL + wide * 1.8f};
+        } else if (pose < 0.85f) {
+            const float lean = glm::radians(rng.nextFloat(15.0f, 50.0f));  // leaning
+            facing = glm::angleAxis(lean, round(yaw)) * facing;
+            sink   = tall * rng.nextFloat(0.2f, 0.5f);
+            room.radius = wide * 1.3f + tall * std::sin(lean) * 0.6f;
         } else {
-            at.y -= size.height * scale * rng.nextFloat(0.1f, 0.4f);                                     // upright
+            sink = tall * rng.nextFloat(0.1f, 0.4f);                       // upright
         }
-        d.bob = 0.004f * scale;
-        piece(at, facing, scale, d);
+        const std::optional<glm::vec2> spot = findSpot(far, room);
+        if (!spot) continue;
+        spawnPiece(type, {spot->x, SEA_LEVEL - sink, spot->y}, facing, scale, rocking(3.0f, 10.0f));
     }
 
-    // Chunks of board afloat among them, two squares by two on each face.
-    for (int i = 0; i < 70; ++i) {
-        const float     far  = CLEAR + 2.0f + std::pow(rng.nextFloat(), 1.4f) * 300.0f;
-        const float     size = std::max(far * rng.nextFloat(0.06f, 0.18f), 1.5f);
-        const glm::vec3 at   = round(rng.nextFloat(0.0f, glm::two_pi<float>())) * far + glm::vec3(0.0f, SEA_LEVEL + size * 0.02f, 0.0f);
-        const glm::quat tilt = glm::angleAxis(glm::radians(rng.nextFloat(0.0f, 25.0f)), round(rng.nextFloat(0.0f, glm::two_pi<float>())))
+    // Squares of board afloat among them, white marble and black, one at a time.
+    for (int i = 0; i < 80; ++i) {
+        const float far  = CLEAR + 2.0f + std::pow(rng.nextFloat(), 1.4f) * 300.0f;
+        const float size = std::max(far * rng.nextFloat(0.03f, 0.08f), 1.0f);
+        const std::optional<glm::vec2> spot = findSpot(far, {{}, size * 0.75f, SEA_LEVEL - size * 0.3f, SEA_LEVEL + size * 0.3f});
+        if (!spot) continue;
+        const glm::vec3 at   = {spot->x, SEA_LEVEL + size * 0.03f, spot->y};
+        const glm::quat tilt = glm::angleAxis(glm::radians(rng.nextFloat(0.0f, 20.0f)), round(rng.nextFloat(0.0f, glm::two_pi<float>())))
             * glm::angleAxis(rng.nextFloat(0.0f, glm::two_pi<float>()), up);
-        const EntityId id = place("Wreck", block, ChessLook::wreck(res), at, tilt, {size, size * 0.12f, size}, false);
-        Drifter d;
-        d.id       = id;
-        d.at       = at;
-        d.facing   = tilt;
-        d.rockAxis = round(rng.nextFloat(0.0f, glm::two_pi<float>()));
-        d.rock     = glm::radians(rng.nextFloat(4.0f, 12.0f));
-        d.bob      = size * 0.04f;
-        d.rate     = rng.nextFloat(0.4f, 0.9f);
-        d.phase    = rng.nextFloat(0.0f, glm::two_pi<float>());
-        d.swirl    = rng.nextFloat(0.004f, 0.012f);
+        Drifter d = rocking(4.0f, 12.0f);
+        d.id     = place("Tile Adrift", block, ChessLook::tile(res, i % 2 == 0), at, tilt, {size, size * 0.16f, size}, false);
+        d.at     = at;
+        d.facing = tilt;
+        d.swirl  = SWIRL;
         m_drifters.push_back(d);
     }
 
-    // Flung up into the air: pieces and board chunks hanging there, turning over.
+    // Flung up into the air: pieces and squares hanging there, turning over, each clear of
+    // the sea and of everything else in a sphere round it.
     for (int i = 0; i < 40; ++i) {
-        const float     far = 25.0f + std::pow(rng.nextFloat(), 0.8f) * 220.0f;
-        const glm::vec3 at  = round(rng.nextFloat(0.0f, glm::two_pi<float>())) * far
-            + glm::vec3(0.0f, rng.nextFloat(6.0f, 18.0f) + far * rng.nextFloat(0.05f, 0.35f), 0.0f);
+        const bool      chunk = i % 3 == 0;
+        const PieceType type  = TYPES[rng.nextInt(0, static_cast<int>(std::size(TYPES)) - 1)];
+        const float     far   = 25.0f + std::pow(rng.nextFloat(), 0.8f) * 220.0f;
+        const float     size  = chunk ? far * rng.nextFloat(0.03f, 0.07f) : far * rng.nextFloat(0.8f, 2.5f);
+        const float     reach = chunk ? size * 0.75f : buildOf(type).height * size * 0.6f;
+        const float     y     = std::max(rng.nextFloat(6.0f, 18.0f) + far * rng.nextFloat(0.05f, 0.35f), SEA_LEVEL + reach + 3.0f);
+        const std::optional<glm::vec2> spot = findSpot(far, {{}, reach, y - reach, y + reach});
+        if (!spot) continue;
+        const glm::vec3 at     = {spot->x, y, spot->y};
         const glm::quat facing = glm::angleAxis(rng.nextFloat(0.0f, glm::two_pi<float>()), anyAxis(rng));
         Drifter d;
         d.spinAxis = anyAxis(rng);
         d.spin     = rng.nextFloat(0.04f, 0.2f) * (rng.nextBool() ? 1.0f : -1.0f);
-        d.bob      = rng.nextFloat(0.8f, 3.0f);
+        d.bob      = std::min(rng.nextFloat(0.8f, 3.0f), reach * 0.2f);
         d.rate     = rng.nextFloat(0.2f, 0.45f);
         d.phase    = rng.nextFloat(0.0f, glm::two_pi<float>());
-        d.swirl    = 0.006f;
-        if (i % 3 == 0) {
-            const float    size = far * rng.nextFloat(0.04f, 0.1f);
-            const EntityId id   = place("Flung Wreck", block, ChessLook::wreck(res), at, facing, {size, size * 0.12f, size}, false);
-            d.id     = id;
+        if (chunk) {
+            d.id     = place("Flung Tile", block, ChessLook::tile(res, i % 2 == 0), at, facing, {size, size * 0.16f, size}, false);
             d.at     = at;
             d.facing = facing;
+            d.swirl  = SWIRL;
             m_drifters.push_back(d);
         } else {
-            piece(at, facing, far * rng.nextFloat(0.8f, 2.5f), d);
+            spawnPiece(type, at, facing, size, d);
         }
     }
 }

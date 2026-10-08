@@ -9,6 +9,7 @@
 
 #include "chess_game.h"
 #include "chess_look.h"
+#include "lobby.h"
 #include "scenery.h"
 
 VKM_MODULE_ENTRY
@@ -16,7 +17,7 @@ const char* vkmModuleEngineVersion() { return VKM_ENGINE_VERSION; }
 
 VKM_MODULE_ENTRY
 void vkmRegisterBehaviors() {
-    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar, Game::Scenery>();
+    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar, Game::Scenery, Game::Lobby>();
 }
 
 VKM_MODULE_ENTRY
@@ -46,7 +47,7 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
     env.night.moonlightIntensity = 0.45f;
     env.sky.mie                  = 6.0f;
     env.fog.enabled       = true;
-    env.fog.density       = 0.0025f;
+    env.fog.density       = 0.005f;
     env.fog.height        = -7.5f;
     env.fog.heightFalloff = 0.02f;
     env.fog.anisotropy    = 0.75f;
@@ -75,5 +76,9 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
 
     const EntityId game = scene.createEntity();
     scene.add(game, makeName("Chess"));
-    addBehavior<Game::ChessGame>(scene, game);
+    Game::ChessGame& chess = addBehavior<Game::ChessGame>(scene, game);
+
+    const EntityId lobby = scene.createEntity();
+    scene.add(lobby, makeName("Lobby"));
+    addBehavior<Game::Lobby>(scene, lobby).setGame(&chess);
 }

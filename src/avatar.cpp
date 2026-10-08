@@ -98,6 +98,9 @@ void Avatar::onStart() {
     setHeadVisible(showHead);
 }
 
+// The pointer ring is not the head's child, so it goes with it by hand.
+void Avatar::onDestroy() { destroy(m_pointer); }
+
 void Avatar::setPose(const glm::vec3& position, const glm::quat& facing) {
     m_target = position;
     m_facing = facing;

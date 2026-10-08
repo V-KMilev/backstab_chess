@@ -2,6 +2,7 @@
 
 #include "chess_game.h"
 
+#include "dial.h"
 #include "world.h"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include "ecs/component/ui/ui_text.h"
 #include "platform/window/window_manager.h"
 #include "resource/asset/mesh_asset.h"
+#include "resource/asset/texture_asset.h"
 #include "resource/generate/mesh_generators.h"
 
 namespace Game {
@@ -66,18 +68,13 @@ constexpr float SUN_PEAK      = 45.0f;                           ///< Degrees, a
 constexpr float SUN_RISE_AZ   = 90.0f;                           ///< Azimuth at sunrise, degrees.
 const float     HALF_START    = 0.06f * glm::pi<float>();        ///< Into a half its turn begins.
 const float     HALF_LENGTH   = 0.98f * glm::pi<float>();        ///< How far a turn's sun goes.
-// Between turns the screen blinks and the sun jumps under cover of it: swept there, it would
-// outrun the sky's lighting, which re-bakes a step a frame and pops in behind it.
-constexpr float BLINK_SECONDS = 0.8f;
-constexpr float BLINK_JUMP    = 0.45f;  ///< Into the blink, at its darkest, the sun jumps.
+// Between turns the sun races on to the next sunrise or sunset, a time-lapse.
+constexpr float LAPSE_PER_HALF = 2.0f;   ///< Seconds to race through half a round.
 
 // The HUD: the turn card's clock, the scoreboard's tiles, and their colours.
 constexpr float CARD_WIDTH    = 470.0f;
 constexpr float CARD_HEIGHT   = 100.0f;
 constexpr float DIAL_SIZE     = 84.0f;
-constexpr int   DIAL_ROWS     = 42;     ///< Strips the disc is drawn in.
-const glm::vec4 SUN_FACE      = {1.0f, 0.7f, 0.16f, 1.0f};
-const glm::vec4 MOON_FACE     = {0.72f, 0.79f, 0.95f, 1.0f};
 constexpr int   HURRY_SECONDS = 10;
 constexpr float TILE_WIDTH    = 270.0f;
 constexpr float TILE_HEIGHT   = 46.0f;
@@ -101,14 +98,6 @@ constexpr float     SEAT_HEIGHT   = 3.8f;
 constexpr float     SEAT_DISTANCE = 7.0f;
 constexpr float     SEAT_SPACING  = 3.2f;
 const glm::vec3     SEAT_TARGET   = {0.0f, 1.5f, 0.0f};
-constexpr int       MAX_PER_SIDE  = 4;
-
-const glm::vec3 PALETTE[] = {
-    {0.25f, 0.6f, 1.0f},  {0.95f, 0.35f, 0.75f}, {0.35f, 0.85f, 0.4f}, {1.0f, 0.55f, 0.15f},
-    {0.65f, 0.4f, 1.0f},  {1.0f, 0.85f, 0.2f},   {0.2f, 0.85f, 0.85f}, {0.95f, 0.25f, 0.25f},
-};
-// What each player's pieces become, by their place in their side's order.
-const PieceSet SKINS[] = {PieceSet::Metal, PieceSet::Glass, PieceSet::Stone};
 
 const char* pieceName(PieceType type) {
     switch (type) {
@@ -164,37 +153,64 @@ void ChessGame::onStart() {
     resources().add(generateCylinder(0.5f, 1.0f, 40), "chess:disc");
     resources().add(ringMesh(0.72f, 48), "chess:ring");
 
-    // White's players first, then black's; each colour's turns go round them in that order.
-    whitePlayers = std::clamp(whitePlayers, 1, MAX_PER_SIDE);
-    blackPlayers = std::clamp(blackPlayers, 1, MAX_PER_SIDE);
+    spawnTable();
+    spawnPieces();
+}
+
+void ChessGame::setPlayers(const std::vector<PlayerSetup>& players) {
+    if (m_match) return;
+    for (const Seat& seat : m_seats) destroy(seat.head);
+    m_seats.clear();
+    m_setups = players;
+    spawnPlayers();
+}
+
+// The players are set; the match begins with the first of white's, the view sweeping from the
+// table's orbit to the local player's seat as the sun comes up.
+void ChessGame::begin() {
+    if (m_match || m_setups.empty()) return;
     std::vector<Chess::Player> players;
-    for (int i = 0; i < whitePlayers; ++i) players.push_back({"White " + std::to_string(i + 1), Color::White});
-    for (int i = 0; i < blackPlayers; ++i) players.push_back({"Black " + std::to_string(i + 1), Color::Black});
+    for (const PlayerSetup& setup : m_setups) players.push_back({setup.name, setup.side});
     m_match.emplace(std::move(players));
     m_trophies.assign(m_match->players().size(), 0);
-
-    spawnTable();
-    spawnPlayers();
-    spawnPieces();
     spawnHud();
 
-    // Sat at the first player's seat from the start, rather than travelling there.
-    m_viewer = m_match->current();
-    const Seat& first = m_seats[static_cast<size_t>(m_viewer)];
-    m_eye   = first.eye;
-    m_yaw   = first.yaw;
-    m_pitch = first.pitch;
-    first.avatar->showHead = false;
-    first.avatar->setHeadVisible(false);
+    m_viewer = 0;
+    for (size_t i = 0; i < m_setups.size(); ++i) {
+        if (m_setups[i].local) m_viewer = static_cast<int>(i);
+    }
+    Avatar* first = m_seats[static_cast<size_t>(m_viewer)].avatar;
+    first->showHead = false;
+    first->setHeadVisible(false);
+    m_fromEye   = m_eye;
+    m_fromYaw   = m_yaw;
+    m_fromPitch = m_pitch;
+    m_travel    = 0.0f;
     newTurn();
-    m_sun  = m_turnStart;
-    m_blink = 1.0f;
-
-    updateCamera(0.0f);
+    refreshLooks();
     updateHud(0.0f);
 }
 
+// Before the match: the view circles the table, the day goes by, and the heads wait at their
+// seats.
+void ChessGame::attract(float dt) {
+    m_orbit += dt * 0.07f;
+    m_eye = {std::sin(m_orbit) * 15.0f, 5.5f + std::sin(m_orbit * 0.6f), std::cos(m_orbit) * 15.0f};
+    Math::toYawPitch(glm::vec3(0.0f, 0.4f, 0.0f) - m_eye, m_yaw, m_pitch);
+    if (Transform* view = scene().tryGet<Transform>(findActiveCamera(scene()))) {
+        view->rotation = Math::fromYawPitch(m_yaw, m_pitch);
+        view->position = m_eye;
+    }
+    m_sun += dt * 0.06f;
+    applySun();
+    updateAvatars();
+}
+
 void ChessGame::onUpdate(float dt) {
+    if (!m_match) {
+        attract(dt);
+        return;
+    }
     advanceGlides(dt);
     advanceTakes(dt);
     settleDuel(dt);
@@ -203,9 +219,15 @@ void ChessGame::onUpdate(float dt) {
     updateAvatars();
     updateHud(dt);
 
-    // A click lands only once the last move has, and the view has reached the player's seat.
-    const bool ready = settled() && m_travel >= 1.0f && m_duelTime < 0.0f;
-    if (ready && input().pressed(ACTION_SELECT) && !input().pointerOverUI()) click(squareUnderPointer());
+    // A click lands only on the local player's turn, once the last move has and the view has
+    // reached the seat. The others' turns are theirs, or a debugging bot's.
+    const bool ready = settled() && m_travel >= 1.0f && m_duelTime < 0.0f && m_lapse >= 1.0f && !m_match->over();
+    if (!ready) return;
+    if (m_match->current() == m_viewer) {
+        if (input().pressed(ACTION_SELECT) && !input().pointerOverUI()) click(squareUnderPointer());
+    } else if (debugBots) {
+        playBot(dt);
+    }
 }
 
 void ChessGame::spawnTable() {
@@ -231,12 +253,14 @@ void ChessGame::spawnTable() {
 
 void ChessGame::spawnPlayers() {
     ResourceManager& res = resources();
+    int counts[2] = {0, 0};
+    for (const PlayerSetup& setup : m_setups) ++counts[setup.side == Color::White ? 0 : 1];
     int ranks[2] = {0, 0};
-    const auto& players = m_match->players();
-    for (size_t p = 0; p < players.size(); ++p) {
-        const Color side  = players[p].side;
-        const int   count = side == Color::White ? whitePlayers : blackPlayers;
-        const int   rank  = ranks[side == Color::White ? 0 : 1]++;
+    for (size_t p = 0; p < m_setups.size(); ++p) {
+        const PlayerSetup& setup = m_setups[p];
+        const Color        side  = setup.side;
+        const int          count = counts[side == Color::White ? 0 : 1];
+        const int          rank  = ranks[side == Color::White ? 0 : 1]++;
 
         // White's first player sits on white's left, which is +X; black's is at -X.
         const float along = (static_cast<float>(rank) - 0.5f * static_cast<float>(count - 1)) * SEAT_SPACING;
@@ -247,8 +271,9 @@ void ChessGame::spawnPlayers() {
         seat.viewEye   = seat.eye;
         seat.viewYaw   = seat.yaw;
         seat.viewPitch = seat.pitch;
-        seat.color = PALETTE[p % std::size(PALETTE)];
-        seat.skin  = SKINS[static_cast<size_t>(rank) % std::size(SKINS)];
+        seat.color = setup.color;
+        seat.skin  = setup.skin;
+        seat.takes = setup.takes;
 
         MaterialAsset ring;
         ring.type             = MaterialType::Transparent;
@@ -259,8 +284,6 @@ void ChessGame::spawnPlayers() {
         ring.doubleSided      = true;
         seat.ring = res.add(std::move(ring), "chess:ring:" + std::to_string(p));
 
-        // Until there is a lobby to pick in, everyone takes differently.
-        seat.takes = static_cast<TakeStyle>(p % static_cast<size_t>(TakeStyle::Count));
         MaterialAsset beam;
         beam.type             = MaterialType::Transparent;
         beam.albedo           = glm::vec4(seat.color, 0.22f);
@@ -269,19 +292,21 @@ void ChessGame::spawnPlayers() {
         beam.doubleSided      = true;
         seat.beam = res.add(std::move(beam), "chess:beam:" + std::to_string(p));
 
-        const EntityId head = spawn(players[p].name.c_str());
+        const EntityId head = spawn(setup.name.c_str());
         scene().add(head, Transform{seat.eye, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f)});
         Avatar& avatar   = addBehavior<Avatar>(scene(), head);
         avatar.color     = seat.color;
         avatar.teamWhite = side == Color::White;
         seat.avatar      = &avatar;
+        seat.head        = head;
         m_seats.push_back(seat);
     }
 }
 
 void ChessGame::spawnPieces() {
+    const Chess::Position start = Chess::Position::start();
     for (Square s = 0; s < 64; ++s) {
-        const Chess::Piece piece = m_match->position().at(s);
+        const Chess::Piece piece = start.at(s);
         if (!piece.empty()) m_pieces[static_cast<size_t>(s)] = spawnPiece(piece, s);
     }
     refreshLooks();
@@ -372,6 +397,32 @@ void ChessGame::mark(Square square, float size, MaterialHandle material) {
     drawn.castShadows = false;
     scene().add(hint, std::move(drawn));
     m_hints.push_back(hint);
+}
+
+// For debugging alone: a bot looks the board over, picks a move - the best capture going, give or take a whim - and
+// plays it after a moment, its head pointing at the piece and then where it goes meanwhile.
+void ChessGame::playBot(float dt) {
+    constexpr float THINK = 2.2f;
+    if (!m_botMove) {
+        const Chess::Position& position = m_match->position();
+        float best = -1.0f;
+        for (const Chess::Move& move : position.legalMoves()) {
+            const Square taken = position.takenBy(move);
+            const float  worth = (taken != Chess::NO_SQUARE ? static_cast<float>(Chess::captureValue(position.at(taken).type)) : 0.0f)
+                + Math::Random::range(0.0f, 2.5f);
+            if (worth > best) {
+                best      = worth;
+                m_botMove = move;
+            }
+        }
+        m_botTime = 0.0f;
+        if (!m_botMove) return;
+    }
+    m_botTime += dt;
+    if (m_botTime < THINK) return;
+    const Chess::Move move = *m_botMove;
+    m_botMove.reset();
+    tryMove(move);
 }
 
 void ChessGame::click(Square square) {
@@ -495,10 +546,10 @@ void ChessGame::finishDuel(bool challengerWon) {
 // or the view travels. A duel the sun sets on is the defender's: they held out.
 void ChessGame::updateSun(float dt) {
     const bool waiting = m_match->over() || !settled() || m_travel < 1.0f;
-    if (m_blink < 1.0f) {
+    if (m_lapse < 1.0f) {
         // Once the last move has landed.
-        if (settled()) m_blink = std::min(m_blink + dt / BLINK_SECONDS, 1.0f);
-        if (m_blink >= BLINK_JUMP) m_sun = m_turnStart;
+        if (settled()) m_lapse = std::min(m_lapse + dt / m_lapseTime, 1.0f);
+        m_sun = glm::mix(m_lapseFrom, m_turnStart, smooth(m_lapse));
     } else if (!waiting && turnSeconds > 0.0f) {
         m_sun += HALF_LENGTH / turnSeconds * dt;
         if (m_sun >= m_turnEnd) {
@@ -507,7 +558,11 @@ void ChessGame::updateSun(float dt) {
             else timeOut();
         }
     }
+    applySun();
+}
 
+// The sky from the sun's angle round it, and the lamp by how dark it is.
+void ChessGame::applySun() {
     const float elevation = SUN_PEAK * std::sin(m_sun);
     SkySettings& sky = scene().environment().sky;
     sky.sunElevation = elevation;
@@ -516,10 +571,6 @@ void ChessGame::updateSun(float dt) {
     // The lamp comes up through dusk, and down again with the dawn.
     const float night = glm::smoothstep(8.0f, -6.0f, elevation);
     if (Light* lamp = scene().tryGet<Light>(m_lamp)) lamp->intensity = glm::mix(LAMP_DAY, LAMP_NIGHT, night);
-
-    const float dark = m_blink < BLINK_JUMP ? smooth(m_blink / BLINK_JUMP) : 1.0f - smooth((m_blink - BLINK_JUMP) / (1.0f - BLINK_JUMP));
-    if (UIImage* fade = scene().tryGet<UIImage>(m_fade)) fade->color.a = 0.92f * dark;
-    if (UIElement* place = scene().tryGet<UIElement>(m_fade)) place->visible = dark > 0.0f;
 }
 
 // The side to move's turn begins: the sun hurries on to its sunrise, or its sunset, the next
@@ -530,7 +581,9 @@ void ChessGame::newTurn() {
     const float laps  = std::ceil((m_sun - start) / glm::two_pi<float>());
     m_turnStart = start + std::max(laps, 0.0f) * glm::two_pi<float>();
     m_turnEnd   = m_turnStart + HALF_LENGTH;
-    m_blink     = 0.0f;
+    m_lapseFrom = m_sun;
+    m_lapse     = 0.0f;
+    m_lapseTime = std::clamp((m_turnStart - m_sun) / glm::pi<float>() * LAPSE_PER_HALF, 0.6f, 2.6f);
 }
 
 // The sun has set on a player who has not moved: a move is made for them, one that needs no
@@ -701,7 +754,7 @@ void ChessGame::refreshLooks() {
     for (Square s = 0; s < 64; ++s) {
         const DrawnPiece* drawn = drawnOf(m_pieces[static_cast<size_t>(s)]);
         if (!m_pieces[static_cast<size_t>(s)] || !drawn) continue;
-        const int            owner = m_match->ownerOf(s);
+        const int            owner = m_match ? m_match->ownerOf(s) : -1;
         const Seat*          seat  = owner >= 0 ? &m_seats[static_cast<size_t>(owner)] : nullptr;
         const MaterialHandle skin  = ChessLook::piece(res, seat ? seat->skin : PieceSet::Classic, drawn->side);
         if (Mesh* body = scene().tryGet<Mesh>(drawn->body)) body->material = skin;
@@ -714,34 +767,14 @@ void ChessGame::refreshLooks() {
 }
 
 void ChessGame::updateCamera(float dt) {
-    // The view goes to whoever moves next once the last move has landed and no duel is waiting.
-    const int next = m_match->over() ? m_viewer : m_match->current();
-    if (next >= 0 && next != m_viewer && settled() && m_duelTime < 0.0f) {
-        Seat& left = m_seats[static_cast<size_t>(m_viewer)];
-        left.viewEye   = m_eye;
-        left.viewYaw   = m_yaw;
-        left.viewPitch = m_pitch;
-        Avatar* leaving = left.avatar;
-        Avatar* coming  = m_seats[static_cast<size_t>(next)].avatar;
-        leaving->showHead = true;
-        leaving->setHeadVisible(true);
-        coming->showHead = false;
-        coming->setHeadVisible(false);
-        m_viewer    = next;
-        m_fromEye   = m_eye;
-        m_fromYaw   = m_yaw;
-        m_fromPitch = m_pitch;
-        m_travel    = 0.0f;
-        clearChoices();
-    }
     const Seat&     seat  = m_seats[static_cast<size_t>(m_viewer)];
     const glm::vec3 goal  = seat.viewEye;
     const float     goalY = seat.viewYaw;
     const float     goalP = seat.viewPitch;
 
     if (m_travel < 1.0f) {
-        // Round the table to the next seat, wide of the other players' heads and rising a
-        // little, with the board held in view between the two seats' own angles.
+        // Round the table to the seat, wide of the other players' heads and rising a little,
+        // with the board held in view between the two ends' own angles.
         m_travel = std::min(m_travel + dt / TRAVEL_SECONDS, 1.0f);
         const float e      = smooth(m_travel);
         const float arc    = std::sin(m_travel * glm::pi<float>());
@@ -801,7 +834,7 @@ void ChessGame::updateCamera(float dt) {
 // The viewer's head rides the camera and points where the cursor does; everyone else sits
 // at their seat watching the board, and two duelling players stare each other down.
 void ChessGame::updateAvatars() {
-    const std::optional<Chess::Duel>& duel = m_match->duel();
+    const Chess::Duel* duel = m_match && m_match->duel() ? &*m_match->duel() : nullptr;
     for (size_t i = 0; i < m_seats.size(); ++i) {
         const Seat& seat   = m_seats[i];
         const int   player = static_cast<int>(i);
@@ -812,6 +845,14 @@ void ChessGame::updateAvatars() {
             continue;
         }
         glm::vec3 look = SEAT_TARGET;
+        if (m_botMove && m_match && player == m_match->current()) {
+            // A bot thinking: at the piece, then at where it goes.
+            const Square at = m_botTime < 1.1f ? m_botMove->from : m_botMove->to;
+            look = squareCentre(at);
+            seat.avatar->setPose(seat.eye, Math::lookRotation(look - seat.eye));
+            seat.avatar->setPointer(true, squareCentre(at));
+            continue;
+        }
         if (duel && (duel->challenger == player || duel->defender == player)) {
             const int rival = duel->challenger == player ? duel->defender : duel->challenger;
             look = rival == m_viewer ? m_eye : m_seats[static_cast<size_t>(rival)].eye;
@@ -822,21 +863,6 @@ void ChessGame::updateAvatars() {
 }
 
 void ChessGame::spawnHud() {
-    // The blink between turns, over the scene and under the HUD.
-    const EntityId curtain = spawn("Curtain");
-    UICanvas under;
-    under.sortOrder = 5;
-    scene().add(curtain, std::move(under));
-    m_fade = spawn("Fade", curtain);
-    UIElement whole;
-    whole.relativeSize = {1.0f, 1.0f};
-    whole.size         = {0.0f, 0.0f};
-    whole.visible      = false;
-    scene().add(m_fade, std::move(whole));
-    UIImage black;
-    black.color = {0.02f, 0.02f, 0.05f, 0.0f};
-    scene().add(m_fade, std::move(black));
-
     const EntityId canvas = spawn("HUD");
     UICanvas layer;
     layer.sortOrder = 10;
@@ -875,30 +901,17 @@ void ChessGame::spawnHud() {
     const EntityId  dial   = spawn("Dial", card);
     scene().add(dial, centred(hub, glm::vec2(DIAL_SIZE)));
     const float     radius = DIAL_SIZE * 0.5f;
-    // The disc, in strips: each row split where the turning line between the faces crosses it.
-    const float row = DIAL_SIZE / static_cast<float>(DIAL_ROWS);
-    for (int i = 0; i < DIAL_ROWS * 2; ++i) {
-        m_dialStrips.push_back(panel("Dial Strip", dial, UIElement::at({0.0f, 0.0f}, {0.0f, static_cast<float>(i / 2) * row}, {0.0f, row + 0.5f}), SUN_FACE, 0.0f));
-    }
-    // The sun's face on its half, the moon's craters on the other: where they sit with the
-    // sun on top, from the centre.
-    const auto mark = [&](const glm::vec2& at, float size, const glm::vec4& color) {
-        m_dialMarks.push_back({panel("Dial Mark", dial, centred({radius, radius}, glm::vec2(size)), color, size * 0.5f), at * radius, size});
-    };
-    // A corona of dots round the sun's half, just outside the disc.
-    for (int i = 0; i < 9; ++i) {
-        const float a = glm::radians(-80.0f + 20.0f * static_cast<float>(i));
-        mark(glm::vec2(std::sin(a), -std::cos(a)) * 1.17f, 5.0f, SUN_FACE);
-    }
-    const glm::vec4 crater = {0.45f, 0.52f, 0.7f, 0.85f};
-    mark({-0.38f, 0.42f}, 10.0f, crater);
-    mark({0.3f, 0.62f}, 7.0f, crater);
-    mark({0.42f, 0.3f}, 4.5f, crater);
-    mark({-0.08f, 0.74f}, 4.0f, crater);
-    // A rim over the strips' stepped edge, and a hub for the seconds.
-    UIElement rimPlace = centred({radius, radius}, glm::vec2(DIAL_SIZE + 4.0f));
-    m_dialRim = panel("Dial Rim", dial, rimPlace, {0.0f, 0.0f, 0.0f, 0.0f}, radius + 2.0f);
-    if (UIImage* rim = scene().tryGet<UIImage>(m_dialRim)) rim->shape.borderWidth = 4.0f;
+    // The face, a texture painted every frame as it turns.
+    TextureAsset face;
+    face.params.width           = Dial::SIZE;
+    face.params.height          = Dial::SIZE;
+    face.params.internalFormat  = TextureInternalFormat::SRGBA8;
+    face.params.format          = TexturePixelFormat::RGBA;
+    face.params.generateMipmaps = false;
+    Dial::paint(face.pixelData, 0.0f, 0.0f);
+    m_dialFace = resources().add(std::move(face), "hud:dial");
+    const EntityId disc = panel("Dial Face", dial, UIElement::at({0.0f, 0.0f}, {0.0f, 0.0f}, glm::vec2(DIAL_SIZE)), HUD_TEXT, 0.0f);
+    if (UIImage* image = scene().tryGet<UIImage>(disc)) image->texture = m_dialFace;
     panel("Dial Hub", dial, centred({radius, radius}, {38.0f, 38.0f}), {0.06f, 0.06f, 0.1f, 0.92f}, 19.0f);
     m_clockSeconds = label("Clock Seconds", dial, centred({radius, radius}, {DIAL_SIZE, 30.0f}), 24.0f, UIText::Align::Center);
 
@@ -923,13 +936,6 @@ void ChessGame::spawnHud() {
             row.points = label("Points", row.tile, UIElement::at({1.0f, 0.5f}, {-14.0f, 0.0f}, {70.0f, TILE_HEIGHT}), 30.0f, UIText::Align::Right);
             y += TILE_HEIGHT + 6.0f;
         }
-    }
-
-    // How to get about, small in the bottom left.
-    const EntityId hint = label("Controls", canvas, UIElement::at({0.0f, 1.0f}, {20.0f, -14.0f}, {900.0f, 26.0f}), 18.0f, UIText::Align::Left);
-    if (UIText* text = scene().tryGet<UIText>(hint)) {
-        text->text  = "WASD fly    Space / Shift up and down    Right-drag look    Wheel closer    F back to your seat";
-        text->color = glm::vec4(glm::vec3(HUD_TEXT), 0.55f);
     }
 
 }
@@ -962,36 +968,14 @@ void ChessGame::updateHud(float dt) {
     const int   left    = static_cast<int>(std::ceil((1.0f - through) * turnSeconds));
     const bool  hurry   = left <= HURRY_SECONDS && !m_match->over();
     const float pulse   = hurry ? 0.5f + 0.5f * std::sin(m_hudTime * 9.0f) : 0.0f;
-    const float turn    = m_sun - HALF_START;
-    const glm::vec2 sunward = {std::sin(turn), -std::cos(turn)};  // screen y is down
-    const float radius  = DIAL_SIZE * 0.5f;
-    const float row     = DIAL_SIZE / static_cast<float>(DIAL_ROWS);
-    for (int i = 0; i < DIAL_ROWS; ++i) {
-        // The row's chord, and where the line between the faces crosses it.
-        const float y     = (static_cast<float>(i) + 0.5f) * row - radius;
-        const float chord = std::sqrt(std::max(radius * radius - y * y, 0.0f));
-        float split = sunward.x > 0.0f ? chord : -chord;  // the sun's side, where the line misses the row
-        if (std::abs(sunward.x) > 1e-4f) split = std::clamp(-y * sunward.y / sunward.x, -chord, chord);
-        else split = y * sunward.y > 0.0f ? -chord : chord;
-        const bool sunRight = std::abs(sunward.x) > 1e-4f ? sunward.x > 0.0f : y * sunward.y > 0.0f;
-        const auto strip = [&](EntityId id, float from, float to, const glm::vec4& color) {
-            if (UIElement* place = scene().tryGet<UIElement>(id)) {
-                place->position.x = radius + from;
-                place->size.x     = std::max(to - from, 0.0f);
-            }
-            if (UIImage* fill = scene().tryGet<UIImage>(id)) fill->color = color;
-        };
-        strip(m_dialStrips[static_cast<size_t>(i * 2)], -chord, split, sunRight ? MOON_FACE : SUN_FACE);
-        strip(m_dialStrips[static_cast<size_t>(i * 2 + 1)], split, chord, sunRight ? SUN_FACE : MOON_FACE);
-    }
-    const float c = std::cos(turn);
-    const float s = std::sin(turn);
-    for (const DialMark& mark : m_dialMarks) {
-        const glm::vec2 at = {mark.at.x * c - mark.at.y * s, mark.at.x * s + mark.at.y * c};
-        if (UIElement* place = scene().tryGet<UIElement>(mark.id)) place->position = glm::vec2(radius) + at - glm::vec2(mark.size * 0.5f);
-    }
-    if (UIImage* rim = scene().tryGet<UIImage>(m_dialRim)) {
-        rim->shape.borderColor = hurry ? glm::vec4(glm::vec3(HURRY_COLOR), 0.6f + 0.4f * pulse) : glm::vec4(0.08f, 0.08f, 0.12f, 1.0f);
+    // Painted again only once it has turned a hair's width, or every frame while it pulses.
+    const float turned = m_sun - HALF_START;
+    if (hurry || std::abs(turned - m_dialPainted) > 0.004f) {
+        if (TextureAsset* face = resources().tryEdit(m_dialFace)) {
+            Dial::paint(face->pixelData, turned, hurry ? 0.4f + 0.6f * pulse : 0.0f);
+            resources().commit(m_dialFace);
+            m_dialPainted = hurry ? -1000.0f : turned;
+        }
     }
     if (UIText* seconds = scene().tryGet<UIText>(m_clockSeconds)) {
         setText(seconds, m_match->over() ? "" : std::to_string(left));
@@ -999,7 +983,7 @@ void ChessGame::updateHud(float dt) {
     }
 
     // Whose move, and what is going on.
-    std::string name   = current >= 0 ? nameOf(current) : "";
+    std::string name   = current < 0 ? "" : current == m_viewer ? "Your move" : nameOf(current);
     std::string detail;
     glm::vec4   color  = current >= 0 ? glm::vec4(m_seats[static_cast<size_t>(current)].color, 1.0f) : HUD_TEXT;
     if (m_match->over()) {

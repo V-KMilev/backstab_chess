@@ -29,21 +29,6 @@ float backOut(float t) {
     return 1.0f + (S + 1.0f) * u * u * u + S * u * u;
 }
 
-// Falls to 1 and bounces twice, smaller each time.
-float bounceOut(float t) {
-    if (t < 1.0f / 2.75f) return 7.5625f * t * t;
-    if (t < 2.0f / 2.75f) {
-        t -= 1.5f / 2.75f;
-        return 7.5625f * t * t + 0.75f;
-    }
-    if (t < 2.5f / 2.75f) {
-        t -= 2.25f / 2.75f;
-        return 7.5625f * t * t + 0.9375f;
-    }
-    t -= 2.625f / 2.75f;
-    return 7.5625f * t * t + 0.984375f;
-}
-
 TakePose floatAway(float t, const glm::vec3& from, const glm::vec3& to) {
     TakePose pose;
     pose.position = glm::mix(from, to, smooth(t)) + UP * (1.4f * std::sin(t * glm::pi<float>()));
@@ -83,7 +68,7 @@ TakePose beam(float t, const glm::vec3& from, const glm::vec3& to) {
     return pose;
 }
 
-// Straight up out of sight, spinning, and down onto the trophy spot with a bounce.
+// Straight up out of sight, spinning, and down onto the trophy spot, settling softly.
 TakePose launch(float t, const glm::vec3& from, const glm::vec3& to) {
     TakePose pose;
     if (t < 0.3f) {
@@ -92,7 +77,9 @@ TakePose launch(float t, const glm::vec3& from, const glm::vec3& to) {
         pose.spin     = glm::two_pi<float>() * 3.0f * u;
         return pose;
     }
-    pose.position = to + UP * (LAUNCH_HEIGHT * (1.0f - bounceOut(phase(t, 0.3f, 1.0f))));
+    // Down out of the sky and settling softly onto its place.
+    const float u = phase(t, 0.3f, 1.0f);
+    pose.position = to + UP * (LAUNCH_HEIGHT * std::pow(1.0f - u, 3.0f));
     return pose;
 }
 

@@ -10,7 +10,7 @@ enum class TakeStyle : int {
     Float,   ///< Rises, turns once and drifts across.
     Sink,    ///< Sinks into the board with a ripple, and surfaces through the table.
     Beam,    ///< Lifted up a column of light, and beamed down at the trophies.
-    Launch,  ///< Rockets out of sight, and drops in with a bounce.
+    Launch,  ///< Rockets out of sight, and drops back down to settle softly.
     Squash,  ///< Flattened by the piece landing on it, popped, and popped back in.
     Count
 };

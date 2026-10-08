@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
+#include "core/math/random.h"
 #include "resource/asset/material_asset.h"
 #include "resource/asset/texture_asset.h"
+
+#include "textures.h"
 
 namespace Game {
 
@@ -36,47 +40,46 @@ MaterialAsset textured(ResourceManager& resources, const char* part) {
     return m;
 }
 
-// Two squares by two of a chessboard: pale stone and dark, with a fine seam between them.
-TextureAsset checker() {
-    constexpr uint32_t SIZE = 256;
-    constexpr uint32_t HALF = SIZE / 2;
-    TextureAsset texture;
-    texture.params.width          = SIZE;
-    texture.params.height         = SIZE;
-    texture.params.internalFormat = TextureInternalFormat::SRGBA8;
-    texture.params.format         = TexturePixelFormat::RGBA;
-    texture.params.wrapS          = TextureWrapMode::Repeat;
-    texture.params.wrapT          = TextureWrapMode::Repeat;
-    texture.pixelData.resize(SIZE * SIZE * 4);
-    for (uint32_t y = 0; y < SIZE; ++y) {
-        for (uint32_t x = 0; x < SIZE; ++x) {
-            const bool     light = ((x / HALF) + (y / HALF)) % 2 == 0;
-            const uint32_t edgeX = std::min(x % HALF, HALF - 1 - x % HALF);
-            const uint32_t edgeY = std::min(y % HALF, HALF - 1 - y % HALF);
-            const bool     seam  = std::min(edgeX, edgeY) < 2;
-            uint8_t v = light ? 205 : 26;
-            if (seam) v = 20;
-            uint8_t* texel = &texture.pixelData[(y * SIZE + x) * 4];
-            texel[0] = v;
-            texel[1] = static_cast<uint8_t>(v * 0.97f);
-            texel[2] = static_cast<uint8_t>(v * 0.93f);
-            texel[3] = 255;
+// The sea's ripples, a tangent-space normal map that repeats: a few hundred small waves with
+// sizes and headings spread round the wind's as real chop is, shorter ones gentler, each a
+// whole number of cycles across the tile so its edges meet. Each wave's slope is summed from
+// tables of its cosine and sine along each axis, so the sum costs no trigonometry per texel.
+TextureAsset ripples() {
+    constexpr int   SIZE  = 1024;
+    constexpr int   WAVES = 240;
+    constexpr float WIND  = 0.35f;  ///< The wind's heading, radians.
+    const float     tau   = 6.28318530718f;
+
+    struct Wave {
+        int   fx, fy;
+        float amplitude, phase;
+    };
+    std::vector<Wave> waves;
+    Math::Rng rng(0x5EA, 9);
+    while (static_cast<int>(waves.size()) < WAVES) {
+        // Cycles across the tile, many more short than long; headings spread round the wind's.
+        const float cycles  = 3.0f + std::pow(rng.nextFloat(), 1.8f) * 85.0f;
+        const float heading = WIND + rng.nextFloat(-1.0f, 1.0f) * rng.nextFloat(0.0f, 1.6f);
+        const int   fx      = static_cast<int>(std::round(std::cos(heading) * cycles));
+        const int   fy      = static_cast<int>(std::round(std::sin(heading) * cycles));
+        if (fx == 0 && fy == 0) continue;
+        // A slope spectrum falling with frequency, as the sea's does.
+        const float f = std::sqrt(static_cast<float>(fx * fx + fy * fy));
+        waves.push_back({fx, fy, std::pow(f, -1.9f) * rng.nextFloat(0.5f, 1.0f), rng.nextFloat(0.0f, tau)});
+    }
+
+    // cos and sin of 2 pi f x / SIZE for every frequency used, along a row.
+    constexpr int MAX_F = 96;
+    std::vector<float> cosT(static_cast<size_t>((2 * MAX_F + 1) * SIZE));
+    std::vector<float> sinT(cosT.size());
+    for (int f = -MAX_F; f <= MAX_F; ++f) {
+        for (int x = 0; x < SIZE; ++x) {
+            const float a = tau * static_cast<float>(f * x) / SIZE;
+            cosT[static_cast<size_t>((f + MAX_F) * SIZE + x)] = std::cos(a);
+            sinT[static_cast<size_t>((f + MAX_F) * SIZE + x)] = std::sin(a);
         }
     }
-    return texture;
-}
 
-// The sea's ripples, a tangent-space normal map that repeats: a sum of waves whose
-// frequencies are whole numbers across the tile, so its edges meet.
-TextureAsset ripples() {
-    constexpr uint32_t SIZE = 256;
-    struct Wave {
-        float fx, fy, amplitude, phase;
-    };
-    const Wave WAVES[] = {
-        {3, 1, 1.0f, 0.0f}, {-2, 4, 0.7f, 1.7f}, {5, -3, 0.45f, 0.4f}, {-7, -2, 0.3f, 2.9f},
-        {1, 9, 0.22f, 5.1f}, {11, 6, 0.14f, 3.3f}, {-13, 9, 0.1f, 0.9f}, {17, -14, 0.07f, 4.4f},
-    };
     TextureAsset texture;
     texture.params.width          = SIZE;
     texture.params.height         = SIZE;
@@ -84,24 +87,34 @@ TextureAsset ripples() {
     texture.params.format         = TexturePixelFormat::RG;
     texture.params.wrapS          = TextureWrapMode::Repeat;
     texture.params.wrapT          = TextureWrapMode::Repeat;
-    texture.pixelData.resize(SIZE * SIZE * 2);
-    const float tau = 6.28318530718f;
-    for (uint32_t y = 0; y < SIZE; ++y) {
-        for (uint32_t x = 0; x < SIZE; ++x) {
-            const float u = static_cast<float>(x) / SIZE;
-            const float v = static_cast<float>(y) / SIZE;
-            float dx = 0.0f;
-            float dy = 0.0f;
-            for (const Wave& w : WAVES) {
-                const float c = std::cos(tau * (w.fx * u + w.fy * v) + w.phase) * w.amplitude * tau;
-                dx += c * w.fx;
-                dy += c * w.fy;
+    texture.pixelData.resize(static_cast<size_t>(SIZE * SIZE * 2));
+    std::vector<float> dx(static_cast<size_t>(SIZE * SIZE), 0.0f);
+    std::vector<float> dy(dx.size(), 0.0f);
+    for (const Wave& w : waves) {
+        // slope = A * 2 pi f * cos(2 pi (fx x + fy y) + phase), split by angle addition.
+        const float cp = std::cos(w.phase);
+        const float sp = std::sin(w.phase);
+        const float* cx = &cosT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
+        const float* sx = &sinT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
+        const float* cy = &cosT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
+        const float* sy = &sinT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
+        for (int y = 0; y < SIZE; ++y) {
+            // cos(b + phase) and sin(b + phase) for the row's part b = 2 pi fy y.
+            const float cb = cy[y] * cp - sy[y] * sp;
+            const float sb = sy[y] * cp + cy[y] * sp;
+            float* rowX = &dx[static_cast<size_t>(y * SIZE)];
+            float* rowY = &dy[static_cast<size_t>(y * SIZE)];
+            for (int x = 0; x < SIZE; ++x) {
+                const float c = (cx[x] * cb - sx[x] * sb) * w.amplitude;
+                rowX[x] += c * static_cast<float>(w.fx);
+                rowY[x] += c * static_cast<float>(w.fy);
             }
-            // The slope, scaled to a gentle tilt, as x and y of a normal.
-            const glm::vec3 n = glm::normalize(glm::vec3(-dx * 0.012f, -dy * 0.012f, 1.0f));
-            texture.pixelData[(y * SIZE + x) * 2 + 0] = static_cast<uint8_t>((n.x * 0.5f + 0.5f) * 255.0f);
-            texture.pixelData[(y * SIZE + x) * 2 + 1] = static_cast<uint8_t>((n.y * 0.5f + 0.5f) * 255.0f);
         }
+    }
+    for (size_t i = 0; i < dx.size(); ++i) {
+        const glm::vec3 n = glm::normalize(glm::vec3(-dx[i] * 0.35f, -dy[i] * 0.35f, 1.0f));
+        texture.pixelData[i * 2 + 0] = static_cast<uint8_t>((n.x * 0.5f + 0.5f) * 255.0f);
+        texture.pixelData[i * 2 + 1] = static_cast<uint8_t>((n.y * 0.5f + 0.5f) * 255.0f);
     }
     return texture;
 }
@@ -180,27 +193,39 @@ void build(ResourceManager& resources) {
     obsidian.clearcoatRoughness = 0.02f;
     add(resources, obsidian, pieceName(PieceSet::Stone, Color::Black));
 
+    // Lacquered walnut: planks and grain under a clear coat.
     MaterialAsset table;
-    table.albedo             = {0.11f, 0.06f, 0.035f, 1.0f};
-    table.roughness          = 0.6f;
-    table.clearcoat          = 0.5f;
-    table.clearcoatRoughness = 0.35f;  // satin: the lamp spreads into a sheen, not a second bulb
+    table.albedoTexture      = resources.add(Textures::walnutColor(), "chess:walnut");
+    table.normalTexture      = resources.add(Textures::walnutNormal(), "chess:walnut_normal");
+    table.roughness          = 0.5f;
+    table.clearcoat          = 0.7f;
+    table.clearcoatRoughness = 0.12f;
     add(resources, table, "chess:table");
 
-    // The sea: dark and glassy under ripples, a mirror for the sky and what floats on it.
+    // The sea: deep and glassy under ripples, foam streaking it, a mirror for the sky and what
+    // floats on it.
     MaterialAsset sea;
-    sea.albedo        = {0.01f, 0.03f, 0.04f, 1.0f};
-    sea.roughness     = 0.04f;
+    sea.albedo        = {1.0f, 1.0f, 1.0f, 1.0f};
+    sea.albedoTexture = resources.add(Textures::seaColor(), "chess:sea_color");
+    sea.roughness     = 1.0f;  // the surface map says how rough
+    sea.aoMetallicRoughnessTexture = resources.add(Textures::seaSurface(), "chess:sea_surface");
+    // Light through the crests, green as the sea's is.
+    sea.subsurface      = 0.5f;
+    sea.subsurfaceColor = {0.08f, 0.4f, 0.32f};
     sea.normalTexture = resources.add(ripples(), "chess:ripples");
-    sea.normalScale   = 0.7f;
+    sea.normalScale   = 0.6f;
     add(resources, sea, "chess:sea");
 
-    // Wrecked board, a chunk of squares two by two on each face.
-    MaterialAsset wreck;
-    wreck.albedoTexture = resources.add(checker(), "chess:checker");
-    wreck.roughness     = 0.15f;
-    wreck.clearcoat     = 0.6f;
-    add(resources, wreck, "chess:wreck");
+    // Single squares of a board, adrift: white marble and black, polished.
+    const TextureHandle stoneNormal = resources.add(Textures::marbleNormal(), "chess:stone_normal");
+    for (const bool white : {true, false}) {
+        MaterialAsset tile;
+        tile.albedoTexture = resources.add(Textures::marbleColor(white), white ? "chess:marble" : "chess:black_marble");
+        tile.normalTexture = stoneNormal;
+        tile.roughness     = 0.12f;
+        tile.clearcoat     = 0.5f;
+        add(resources, tile, white ? "chess:tile_white" : "chess:tile_black");
+    }
 
     MaterialAsset brass;
     brass.albedo    = {0.86f, 0.64f, 0.32f, 1.0f};
@@ -214,9 +239,12 @@ void build(ResourceManager& resources) {
     glow.emission         = {1.0f, 0.62f, 0.28f};
     glow.emissiveStrength = 6.0f;
     add(resources, glow, "chess:glow");
-    MaterialAsset lantern = glow;
-    lantern.emission         = {1.0f, 0.78f, 0.5f};
-    lantern.emissiveStrength = 12.0f;
+    MaterialAsset lantern;
+    lantern.albedo           = {1.0f, 0.85f, 0.6f, 1.0f};
+    lantern.roughness        = 0.08f;
+    lantern.clearcoat        = 1.0f;
+    lantern.emission         = {1.0f, 0.7f, 0.38f};
+    lantern.emissiveStrength = 5.0f;
     add(resources, lantern, "chess:lantern");
 
 
@@ -249,7 +277,9 @@ MaterialHandle table(ResourceManager& resources)  { return resources.findByName<
 MaterialHandle hint(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:hint"); }
 MaterialHandle chosen(ResourceManager& resources) { return resources.findByName<MaterialAsset>("chess:chosen"); }
 MaterialHandle sea(ResourceManager& resources)    { return resources.findByName<MaterialAsset>("chess:sea"); }
-MaterialHandle wreck(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:wreck"); }
+MaterialHandle tile(ResourceManager& resources, bool white) {
+    return resources.findByName<MaterialAsset>(white ? "chess:tile_white" : "chess:tile_black");
+}
 MaterialHandle brass(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:brass"); }
 MaterialHandle glow(ResourceManager& resources)      { return resources.findByName<MaterialAsset>("chess:glow"); }
 MaterialHandle lantern(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:lantern"); }
