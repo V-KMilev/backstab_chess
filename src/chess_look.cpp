@@ -251,14 +251,14 @@ void build(ResourceManager& resources) {
     // The hints glow faintly through the board's lacquer, rather than sit on it as decals.
     MaterialAsset hint;
     hint.type             = MaterialType::Transparent;
-    hint.albedo           = {0.35f, 0.75f, 1.0f, 0.35f};
+    hint.albedo           = {0.35f, 0.75f, 1.0f, 0.6f};
     hint.emission         = {0.35f, 0.75f, 1.0f};
-    hint.emissiveStrength = 1.5f;
+    hint.emissiveStrength = 3.0f;
     hint.roughness        = 0.4f;
     add(resources, hint, "chess:hint");
 
     MaterialAsset chosen = hint;
-    chosen.albedo   = {1.0f, 0.72f, 0.3f, 0.45f};
+    chosen.albedo   = {1.0f, 0.72f, 0.3f, 0.65f};
     chosen.emission = {1.0f, 0.72f, 0.3f};
     add(resources, chosen, "chess:chosen");
 

@@ -78,6 +78,16 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             glm::quat facing = {1.0f, 0.0f, 0.0f, 0.0f};
         };
 
+        /// A mark on the board: where a selected piece may go, or what a duel is over.
+        struct Hint {
+            EntityId      id;
+            Chess::Square square = Chess::NO_SQUARE;
+            float         size   = 0.0f;   ///< Across, in metres, at rest.
+            float         delay  = 0.0f;   ///< Seconds before it pops up.
+            bool          target = false;  ///< Swells under the pointer.
+            bool          ring   = false;
+        };
+
         /// A piece's entities: its body, a bishop's ball, and the ring in its owner's colour.
         struct DrawnPiece {
             EntityId     body;
@@ -122,7 +132,8 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         DrawnPiece* drawnOf(EntityId body);
         glm::vec3 squareCentre(Chess::Square square) const;
         Chess::Square squareUnderPointer();
-        void mark(Chess::Square square, float size, MaterialHandle material);
+        void mark(Chess::Square square, float size, MaterialHandle material, bool ring, float delay = 0.0f, bool target = false);
+        void animateHints(float dt);
 
         void click(Chess::Square square);
         void playBot(float dt);
@@ -161,7 +172,8 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         std::array<EntityId, 64> m_pieces{};  ///< The body of the piece on each square.
         std::vector<DrawnPiece>  m_drawn;     ///< Every piece, captured ones too.
         std::vector<Seat>        m_seats;     ///< One per player, as the match numbers them.
-        std::vector<EntityId>    m_hints;
+        std::vector<Hint>        m_hints;
+        float                    m_hintTime = 0.0f;  ///< Since the hints were shown.
         std::vector<Chess::Move> m_choices;
         std::vector<Glide>       m_glides;
         std::vector<Take>        m_takes;

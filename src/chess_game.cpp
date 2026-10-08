@@ -134,6 +134,13 @@ MeshAsset ringMesh(float inner, uint32_t segments) {
     return mesh;
 }
 
+// Overshoots past 1 and settles back, for a pop.
+float backOut(float t) {
+    constexpr float S = 1.70158f;
+    const float     u = t - 1.0f;
+    return 1.0f + (S + 1.0f) * u * u * u + S * u * u;
+}
+
 float smooth(float t) { return t * t * (3.0f - 2.0f * t); }
 
 // Sets @p text only when it differs, so an unchanged line is not laid out again.
@@ -213,6 +220,7 @@ void ChessGame::onUpdate(float dt) {
     }
     advanceGlides(dt);
     advanceTakes(dt);
+    animateHints(dt);
     settleDuel(dt);
     updateCamera(dt);
     updateSun(dt);
@@ -390,13 +398,38 @@ Square ChessGame::squareUnderPointer() {
     return Chess::squareAt(file, rank);
 }
 
-void ChessGame::mark(Square square, float size, MaterialHandle material) {
-    const EntityId hint = spawn("Hint");
-    scene().add(hint, Transform{squareCentre(square) + glm::vec3(0.0f, 0.004f, 0.0f), {1.0f, 0.0f, 0.0f, 0.0f}, {size, 0.006f, size}});
-    Mesh drawn{resources().findByName<MeshAsset>("chess:disc"), material};
+void ChessGame::mark(Square square, float size, MaterialHandle material, bool ring, float delay, bool target) {
+    const EntityId id = spawn("Hint");
+    scene().add(id, Transform{squareCentre(square), {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(0.0f)});
+    Mesh drawn{resources().findByName<MeshAsset>(ring ? "chess:ring" : "chess:disc"), material};
     drawn.castShadows = false;
-    scene().add(hint, std::move(drawn));
-    m_hints.push_back(hint);
+    scene().add(id, std::move(drawn));
+    m_hints.push_back({id, square, size, delay, target, ring});
+}
+
+// The hints pop up one after another, rippling out from the piece, then breathe; the one under
+// the pointer swells, and the chosen piece lifts off the board and hovers.
+void ChessGame::animateHints(float dt) {
+    m_hintTime += dt;
+    const bool   mine    = m_match && m_match->current() == m_viewer && settled();
+    const Square hovered = mine && !m_hints.empty() ? squareUnderPointer() : Chess::NO_SQUARE;
+    for (const Hint& hint : m_hints) {
+        Transform* t = scene().tryGet<Transform>(hint.id);
+        if (!t) continue;
+        const float appear  = std::clamp((m_hintTime - hint.delay) / 0.28f, 0.0f, 1.0f);
+        const float pop     = appear < 1.0f ? backOut(appear) : 1.0f;
+        const float breathe = 1.0f + 0.07f * std::sin(m_hintTime * 3.5f + static_cast<float>(hint.square) * 0.7f);
+        const bool  over    = hint.target && hint.square == hovered;
+        const float across  = hint.size * pop * breathe * (over ? 1.35f : 1.0f);
+        t->scale    = hint.ring ? glm::vec3(across * 0.5f, 1.0f, across * 0.5f) : glm::vec3(across, 0.006f, across);
+        t->position = squareCentre(hint.square) + glm::vec3(0.0f, (hint.ring ? 0.007f : 0.004f) + (over ? 0.01f : 0.0f), 0.0f);
+    }
+    if (m_selected != Chess::NO_SQUARE && m_glides.empty()) {
+        if (Transform* t = scene().tryGet<Transform>(m_pieces[static_cast<size_t>(m_selected)])) {
+            const float rise = smooth(std::min(m_hintTime / 0.2f, 1.0f));
+            t->position.y = BOARD_TOP + rise * (0.14f + 0.025f * std::sin(m_hintTime * 3.0f));
+        }
+    }
 }
 
 // For debugging alone: a bot looks the board over, picks a move - the best capture going, give or take a whim - and
@@ -457,19 +490,28 @@ void ChessGame::showChoices(Square square) {
         if (move.from == square) m_choices.push_back(move);
     }
 
+    // A ring under the piece; a dot on each square it can reach, a ring round each piece it can
+    // take; red where it is a duel.
     ResourceManager& res = resources();
+    m_hintTime = 0.0f;
     const bool teammates = m_match->ownerOf(square) >= 0 && m_match->ownerOf(square) != m_match->current();
-    mark(square, SQUARE * 0.9f, teammates ? ChessLook::duel(res) : ChessLook::chosen(res));
+    mark(square, SQUARE * 0.95f, teammates ? ChessLook::duel(res) : ChessLook::chosen(res), true);
     for (const Chess::Move& move : m_choices) {
         if (move.promotion != PieceType::None && move.promotion != PieceType::Queen) continue;
-        const bool takes = position.takenBy(move) != Chess::NO_SQUARE;
-        const bool duel  = m_match->duelFor(move).has_value();
-        mark(move.to, takes ? SQUARE * 0.85f : SQUARE * 0.32f, duel ? ChessLook::duel(res) : ChessLook::hint(res));
+        const bool  takes = position.takenBy(move) != Chess::NO_SQUARE;
+        const bool  duel  = m_match->duelFor(move).has_value();
+        const int   far   = std::max(std::abs(Chess::fileOf(move.to) - Chess::fileOf(square)), std::abs(Chess::rankOf(move.to) - Chess::rankOf(square)));
+        mark(move.to, takes ? SQUARE * 0.92f : SQUARE * 0.38f, duel ? ChessLook::duel(res) : ChessLook::hint(res), takes,
+             0.04f * static_cast<float>(far), true);
     }
 }
 
 void ChessGame::clearChoices() {
-    for (const EntityId hint : m_hints) destroy(hint);
+    // The lifted piece back down on its square, unless a move is about to carry it.
+    if (m_selected != Chess::NO_SQUARE) {
+        if (Transform* t = scene().tryGet<Transform>(m_pieces[static_cast<size_t>(m_selected)])) t->position = squareCentre(m_selected);
+    }
+    for (const Hint& hint : m_hints) destroy(hint.id);
     m_hints.clear();
     m_choices.clear();
     m_selected = Chess::NO_SQUARE;
@@ -497,8 +539,9 @@ void ChessGame::startDuel(const std::string& title) {
     m_duelTime = 0.0f;
 
     clearChoices();
-    mark(duel.move.from, SQUARE * 0.9f, ChessLook::chosen(resources()));
-    mark(duel.move.to, SQUARE * 0.85f, ChessLook::duel(resources()));
+    m_hintTime = 0.0f;
+    mark(duel.move.from, SQUARE * 0.95f, ChessLook::chosen(resources()), true);
+    mark(duel.move.to, SQUARE * 0.92f, ChessLook::duel(resources()), true, 0.1f);
 
     std::string detail = nameOf(duel.challenger);
     if (duel.kind == Chess::DuelKind::Teammate) {
