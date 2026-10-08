@@ -365,6 +365,16 @@ void Position::play(const Move& move) {
     m_history.push_back(key());
 }
 
+bool Position::pass() {
+    if (inCheck(m_side)) return false;
+    if (m_side == Color::Black) ++m_fullmoves;
+    m_side      = opposite(m_side);
+    m_enPassant = NO_SQUARE;
+    ++m_halfmoves;
+    m_history.push_back(key());
+    return true;
+}
+
 uint64_t Position::key() const {
     // FNV-1a over what makes two positions the same for repetition: the pieces, the side to
     // move, the castling rights and an en-passant square only where a pawn could take there.

@@ -93,6 +93,15 @@ class Position {
         /// Plays @p move, which must be one legalMoves() returned.
         void play(const Move& move);
 
+        /**
+         * @brief Hands the move to the other side without one: Backstab's lost duels do this.
+         *
+         * Only while the side to move is not in check, or the other side could take its king.
+         *
+         * @return False, changing nothing, when the side to move is in check.
+         */
+        bool pass();
+
         /// Whether @p side's king is attacked.
         bool inCheck(Color side) const;
 
