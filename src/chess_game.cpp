@@ -3,6 +3,7 @@
 #include "chess_game.h"
 
 #include "dial.h"
+#include "needle.h"
 #include "shapes.h"
 #include "ui_kit.h"
 #include "world.h"
@@ -22,6 +23,7 @@
 #include "ecs/component/ui/ui_element.h"
 #include "ecs/component/ui/ui_image.h"
 #include "ecs/component/ui/ui_text.h"
+#include "net/net_session.h"
 #include "platform/window/window_manager.h"
 #include "resource/asset/mesh_asset.h"
 #include "resource/asset/texture_asset.h"
@@ -46,19 +48,18 @@ constexpr const char* ACTION_SELECT = "chess/select";
 constexpr const char* ACTION_LOOK   = "chess/look";
 constexpr const char* ACTION_SEAT   = "chess/seat";
 
-// The moves, as key and direction: forward, back, left, right, up, down.
+// The moves, as action and direction: forward, back, left, right, up, down.
 struct Fly {
     const char* action;
-    int         key;
     glm::vec3   along;  ///< In the view's own frame: -Z ahead, +X right, +Y up.
 };
 const Fly FLY[] = {
-    {"chess/forward", GLFW_KEY_W, {0.0f, 0.0f, -1.0f}},
-    {"chess/back", GLFW_KEY_S, {0.0f, 0.0f, 1.0f}},
-    {"chess/left", GLFW_KEY_A, {-1.0f, 0.0f, 0.0f}},
-    {"chess/right", GLFW_KEY_D, {1.0f, 0.0f, 0.0f}},
-    {"chess/up", GLFW_KEY_SPACE, {0.0f, 1.0f, 0.0f}},
-    {"chess/down", GLFW_KEY_LEFT_SHIFT, {0.0f, -1.0f, 0.0f}},
+    {"chess/forward", {0.0f, 0.0f, -1.0f}},
+    {"chess/back", {0.0f, 0.0f, 1.0f}},
+    {"chess/left", {-1.0f, 0.0f, 0.0f}},
+    {"chess/right", {1.0f, 0.0f, 0.0f}},
+    {"chess/up", {0.0f, 1.0f, 0.0f}},
+    {"chess/down", {0.0f, -1.0f, 0.0f}},
 };
 
 constexpr float LOOK_SPEED     = 0.005f;  ///< Radians per pixel dragged.
@@ -125,14 +126,7 @@ float backOut(float t) {
     return 1.0f + (S + 1.0f) * u * u * u + S * u * u;
 }
 
-// Where a duel's needle is, @p t seconds in: 0..1 along its bar, swinging faster and faster.
-float needleAt(float t) { return 0.5f + 0.5f * std::sin(2.4f * t + 0.45f * t * t + 1.2f); }
-
-// How near the middle a needle stopped at @p at: 1 dead centre, 0 at either end.
-float needleScore(float at) { return 1.0f - std::abs(at - 0.5f) * 2.0f; }
-
 constexpr const char* ACTION_DUEL = "chess/duel";
-constexpr float       ZONE        = 0.14f;  ///< The gold zone's share of a needle's bar.
 
 float smooth(float t) { return t * t * (3.0f - 2.0f * t); }
 
@@ -144,16 +138,23 @@ void setText(UIText* label, const std::string& text) {
 } // namespace
 
 void ChessGame::onStart() {
+    // Every action, on every end and in one order: a command's slots go by the order they were
+    // defined, and a server must agree with its clients though it reads no keys. The menu rebinds
+    // them to the player's keys later, in the same slots.
     InputMap& map = input();
-    map.define(ACTION_SELECT, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_LEFT, 1.0f}});
-    map.define(ACTION_LOOK, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_RIGHT, 1.0f}});
-    map.define(ACTION_SEAT, {InputBinding{InputSource::Key, GLFW_KEY_F, 1.0f}});
-    map.define(ACTION_DUEL, {InputBinding{InputSource::Key, GLFW_KEY_SPACE, 1.0f}});
+    for (const KeyBinding& key : defaultKeys()) {
+        const bool mouse = key.key >= 1000;
+        map.define(key.action, {InputBinding{mouse ? InputSource::MouseButton : InputSource::Key, mouse ? key.key - 1000 : key.key, 1.0f}});
+    }
+    map.define("menu/back", {InputBinding{InputSource::Key, GLFW_KEY_ESCAPE, 1.0f}});
+    if (net().role() == NetRole::Server) {
+        m_off = true;
+        return;
+    }
     m_kit.bind(scene(), resources(), input(),
                [this](const char* name, EntityId parent) { return spawn(name, parent); },
                [this](EntityId id) { destroy(id); });
     subscribe([this](const UIClickEvent& click) { m_kit.click(click.eventId); });
-    for (const Fly& fly : FLY) map.define(fly.action, {InputBinding{InputSource::Key, fly.key, 1.0f}});
 
     resources().add(generateCylinder(0.5f, 1.0f, 40), "chess:disc");
     resources().add(Shapes::ring(0.72f, 48), "chess:ring");
@@ -165,7 +166,7 @@ void ChessGame::onStart() {
 }
 
 void ChessGame::setPlayers(const std::vector<PlayerSetup>& players) {
-    if (m_match) return;
+    if (m_off || m_match) return;
     for (const Seat& seat : m_seats) destroy(seat.head);
     m_seats.clear();
     m_setups = players;
@@ -175,7 +176,7 @@ void ChessGame::setPlayers(const std::vector<PlayerSetup>& players) {
 // The players are set; the match begins with the first of white's, the view sweeping from the
 // table's orbit to the local player's seat as the sun comes up.
 void ChessGame::begin() {
-    if (m_match || m_setups.empty()) return;
+    if (m_off || m_match || m_setups.empty()) return;
     std::vector<Chess::Player> players;
     for (const PlayerSetup& setup : m_setups) players.push_back({setup.name, setup.side});
     m_match.emplace(std::move(players));
@@ -200,6 +201,30 @@ void ChessGame::begin() {
 
 // Before the match: the view circles the table, the day goes by, and the heads wait at their
 // seats.
+void ChessGame::applyAction(const Action& action) {
+    if (!m_match) return;
+    if (action.resolve) {
+        if (m_match->duel()) finishDuel(action.won);
+        return;
+    }
+    // The move as the rules know it, castling and en passant and all.
+    for (const Chess::Move& move : m_match->position().legalMoves()) {
+        if (move.from == action.move.from && move.to == action.move.to && move.promotion == action.move.promotion) {
+            clearChoices();
+            closePicker();
+            tryMove(move);
+            return;
+        }
+    }
+    LOG_WARNING("The server played %s, which this board does not allow", Chess::Position::toUci(action.move).c_str());
+}
+
+void ChessGame::applyStop(int duelist, float seconds) {
+    if (m_duelTime < 0.0f || duelist < 0 || duelist > 1) return;
+    float& stop = m_needle.stopAt[static_cast<size_t>(duelist)];
+    if (stop < 0.0f && m_needle.players[static_cast<size_t>(duelist)] != m_viewer) stop = seconds;
+}
+
 std::string ChessGame::overReason() const {
     if (!m_match) return "";
     if (m_match->kingFell()) return std::string("The ") + (m_match->fallenSide() == Color::White ? "white" : "black") + " king fell to strikes";
@@ -217,6 +242,7 @@ std::string ChessGame::overReason() const {
 // Everything the match made goes, the pieces with it, and a fresh set is laid out; the heads
 // stay at their seats, and the view goes back to circling the table.
 void ChessGame::reset() {
+    if (m_off) return;
     for (const DrawnPiece& drawn : m_drawn) destroy(drawn.body);
     for (const Hint& hint : m_hints) destroy(hint.id);
     for (const Take& take : m_takes) {
@@ -236,6 +262,7 @@ void ChessGame::reset() {
     m_scoreRows.clear();
     m_trophies.clear();
     m_hearts = {};
+    m_duelsOpened = 0;
     closeNeedle();
     closePicker();
     for (EntityId& mark : m_lastMarks) {
@@ -296,6 +323,7 @@ void ChessGame::attract(float dt) {
 }
 
 void ChessGame::onUpdate(float dt) {
+    if (m_off) return;
     m_kit.update(dt);
     if (!m_match) {
         attract(dt);
@@ -318,7 +346,7 @@ void ChessGame::onUpdate(float dt) {
     if (!ready) return;
     if (m_match->current() == m_viewer) {
         if (input().pressed(ACTION_SELECT) && !input().pointerOverUI()) click(squareUnderPointer());
-    } else if (debugBots) {
+    } else if (debugBots && !m_remote) {
         playBot(dt);
     }
 }
@@ -546,7 +574,8 @@ void ChessGame::playBot(float dt) {
     if (m_botTime < THINK) return;
     const Chess::Move move = *m_botMove;
     m_botMove.reset();
-    tryMove(move);
+    if (m_remote) m_remote->move(move);
+    else tryMove(move);
 }
 
 void ChessGame::click(Square square) {
@@ -565,7 +594,8 @@ void ChessGame::click(Square square) {
         }
         if (moves.size() == 1) {
             clearChoices();
-            tryMove(moves.front());
+            if (m_remote) m_remote->move(moves.front());
+            else tryMove(moves.front());
             return;
         }
     }
@@ -596,7 +626,8 @@ void ChessGame::openPicker(const std::vector<Chess::Move>& moves) {
         m_kit.button(m_picker, UIElement::at({0.0f, 0.0f}, {x, 76.0f}, {130.0f, 64.0f}), name, [this, chosen] {
             closePicker();
             clearChoices();
-            tryMove(chosen);
+            if (m_remote) m_remote->move(chosen);
+            else tryMove(chosen);
         }, Ui::Style{Ui::FIELD, Ui::INK, 26.0f, 14.0f});
         x += 142.0f;
     }
@@ -675,6 +706,7 @@ void ChessGame::tryMove(const Chess::Move& move) {
 }
 
 void ChessGame::startDuel(const std::string& title) {
+    ++m_duelsOpened;
     const Chess::Duel&     duel     = *m_match->duel();
     const Chess::Position& position = m_match->position();
     m_duelTime = 0.0f;
@@ -719,19 +751,21 @@ void ChessGame::settleDuel(float dt) {
             const bool mine = m_needle.players[static_cast<size_t>(i)] == m_viewer && m_inputEnabled;
             const bool press = mine && (input().pressed(ACTION_DUEL) || (input().pressed(ACTION_SELECT) && !input().pointerOverUI()));
             const float bot  = m_needle.botAt[static_cast<size_t>(i)];
-            if (press || (!mine && bot >= 0.0f && m_duelTime >= bot)) stop = m_duelTime;
+            if (press && m_remote) m_remote->stop(m_duelsOpened, m_duelTime);
+            if (press || (!m_remote && !mine && bot >= 0.0f && m_duelTime >= bot)) stop = m_duelTime;
         }
         done = done && stop >= 0.0f;
-        const float at = stop >= 0.0f ? needleAt(stop) : needleAt(m_duelTime);
+        const float at = stop >= 0.0f ? Needle::at(stop) : Needle::at(m_duelTime);
         if (UIElement* needle = scene().tryGet<UIElement>(m_needle.needle[static_cast<size_t>(i)])) needle->position.x = at * 520.0f - 3.0f;
         if (UIText* text = scene().tryGet<UIText>(m_needle.result[static_cast<size_t>(i)])) {
-            text->text = stop >= 0.0f ? std::to_string(static_cast<int>(std::lround(needleScore(at) * 100.0f))) : "";
+            text->text = stop >= 0.0f ? std::to_string(static_cast<int>(std::lround(Needle::score(stop) * 100.0f))) : "";
         }
     }
+    if (m_remote) return;  // online the server settles it, and its action says how
     const bool settled = done && m_duelTime - std::max(m_needle.stopAt[0], m_needle.stopAt[1]) > 0.7f;
     if (!settled && m_duelTime < duelSeconds) return;
-    const float challenger = m_needle.stopAt[0] >= 0.0f ? needleScore(needleAt(m_needle.stopAt[0])) : 0.0f;
-    const float defender   = m_needle.stopAt[1] >= 0.0f ? needleScore(needleAt(m_needle.stopAt[1])) : 0.0f;
+    const float challenger = m_needle.stopAt[0] >= 0.0f ? Needle::score(m_needle.stopAt[0]) : 0.0f;
+    const float defender   = m_needle.stopAt[1] >= 0.0f ? Needle::score(m_needle.stopAt[1]) : 0.0f;
     finishDuel(challenger > defender);
 }
 
@@ -780,7 +814,7 @@ void ChessGame::openNeedle() {
               who == m_viewer ? "You" : nameOf(who), 26.0f, seatColor(who), UIText::Align::Left);
         const EntityId bar = element("Duel Bar", m_needle.panel, UIElement::at({0.0f, 0.0f}, {240.0f, y + 15.0f}, {520.0f, 14.0f}));
         fill(bar, Ui::FIELD, 7.0f);
-        fill(element("Duel Zone", bar, UIElement::at({0.5f, 0.5f}, {0.0f, 0.0f}, {520.0f * ZONE, 14.0f})), Ui::GOLD, 7.0f);
+        fill(element("Duel Zone", bar, UIElement::at({0.5f, 0.5f}, {0.0f, 0.0f}, {520.0f * Needle::ZONE, 14.0f})), Ui::GOLD, 7.0f);
         m_needle.needle[static_cast<size_t>(i)] = element("Duel Needle", bar, UIElement::at({0.0f, 0.5f}, {0.0f, 0.0f}, {6.0f, 38.0f}));
         fill(m_needle.needle[static_cast<size_t>(i)], glm::vec4(seatColor(who).r, seatColor(who).g, seatColor(who).b, 1.0f), 3.0f);
         m_needle.result[static_cast<size_t>(i)] = element("Duel Result", m_needle.panel, UIElement::at({1.0f, 0.0f}, {-28.0f, y}, {90.0f, 44.0f}));
@@ -847,8 +881,13 @@ void ChessGame::updateSun(float dt) {
         m_sun += HALF_LENGTH / turnSeconds * dt;
         if (m_sun >= m_turnEnd) {
             m_sun = m_turnEnd;
-            if (m_match->duel()) finishDuel(false);
-            else timeOut();
+            // Online the server makes the move, or settles the duel; the sun waits at the horizon.
+            if (m_remote) {
+            } else if (m_match->duel()) {
+                finishDuel(false);
+            } else {
+                timeOut();
+            }
         }
     }
     applySun();

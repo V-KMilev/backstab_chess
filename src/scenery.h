@@ -54,6 +54,7 @@ class Scenery : public ReflectedBehavior<Scenery> {
                        const glm::quat& facing, const glm::vec3& scale, bool shadows = true);
 
     private:
+        bool                   m_off = false;  ///< On a server, which shows nothing.
         std::vector<Drifter>   m_drifters;
         MeshHandle             m_swell;     ///< The sea's surface, moved every frame.
         std::vector<glm::vec2> m_swellRest; ///< Its vertices' places on the plane.

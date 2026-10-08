@@ -13,6 +13,8 @@
 #include "system/render/render_settings.h"
 #include "system/ui/ui_events.h"
 
+#include "net/net_session.h"
+#include "net_link.h"
 #include "scenery.h"
 #include "showcase.h"
 
@@ -115,18 +117,33 @@ TextureAsset rainbow() {
 
 } // namespace
 
-void Menu::link(ChessGame* game, Showcase* showcase, Scenery* scenery) {
+void Menu::link(ChessGame* game, Showcase* showcase, Scenery* scenery, NetLink* net) {
     m_game     = game;
     m_showcase = showcase;
     m_scenery  = scenery;
+    m_net      = net;
 }
 
+void Menu::onlineJoined() { go(Screen::Lobby); }
+
+void Menu::onlineFailed() {
+    if (m_game) m_game->reset();
+    go(Screen::Online);
+}
+
+void Menu::onlineGameStarted() { go(Screen::Playing); }
+
+void Menu::onlineLobby() { go(Screen::Lobby); }
+
 void Menu::onStart() {
+    if (net().role() == NetRole::Server) {
+        m_off = true;
+        return;
+    }
     m_kit.bind(scene(), resources(), input(),
                [this](const char* name, EntityId parent) { return spawn(name, parent); },
                [this](EntityId id) { destroy(id); });
     subscribe([this](const UIClickEvent& click) { m_kit.click(click.eventId); });
-    input().define(ACTION_BACK, {InputBinding{InputSource::Key, GLFW_KEY_ESCAPE, 1.0f}});
 
     m_canvas = spawn("Menu");
     UICanvas layer;
@@ -142,7 +159,14 @@ void Menu::onStart() {
 }
 
 void Menu::onUpdate(float dt) {
+    if (m_off) return;
     m_kit.update(dt);
+
+    // The online screens follow the network: the status as it goes, the seats as they change.
+    if (m_screen == Screen::Online && m_net) {
+        if (UIText* text = scene().tryGet<UIText>(m_statusLabel)) text->text = m_net->status();
+    }
+    if (m_screen == Screen::Lobby && m_net && m_net->seatsVersion() != m_seatsSeen) m_rebuild = true;
 
     if (input().pressed(ACTION_BACK) && !m_kit.capturing()) {
         switch (m_screen) {
@@ -150,7 +174,8 @@ void Menu::onUpdate(float dt) {
             case Screen::Paused:    go(Screen::Playing); break;
             case Screen::Settings:  go(m_return); break;
             case Screen::Play:
-            case Screen::Customize: go(Screen::Main); break;
+            case Screen::Online:    go(Screen::Main); break;
+            case Screen::Customize: go(m_customReturn); break;
             default:                break;
         }
     }
@@ -176,7 +201,9 @@ void Menu::go(Screen screen) {
         if (m_game) m_game->unfocus();
         syncYou();
         storeLocal();
+        if (m_net && m_net->online()) m_net->sendProfile();
     }
+    if (screen == Screen::Customize && was != Screen::Customize) m_customReturn = was == Screen::Lobby ? Screen::Lobby : Screen::Main;
     if (was == Screen::Settings && screen != Screen::Settings) storeLocal();
     if (screen == Screen::Settings && was != Screen::Settings) m_return = was == Screen::Paused ? Screen::Paused : Screen::Main;
     if (screen == Screen::Customize && was != Screen::Customize) {
@@ -199,6 +226,8 @@ void Menu::build() {
     switch (m_screen) {
         case Screen::Main:      buildMain(); break;
         case Screen::Play:      buildPlay(); break;
+        case Screen::Online:    buildOnline(); break;
+        case Screen::Lobby:     buildLobby(); break;
         case Screen::Customize: buildCustomize(); break;
         case Screen::Settings:  buildSettings(); break;
         case Screen::Paused:    buildPaused(); break;
@@ -249,15 +278,16 @@ void Menu::buildMain() {
         const char*           text;
         std::function<void()> act;
     } items[] = {
-        {"PLAY", [this] { go(Screen::Play); }},
+        {"PRACTICE", [this] { go(Screen::Play); }},
+        {"PLAY ONLINE", [this] { go(Screen::Online); }},
         {"CUSTOMIZE", [this] { go(Screen::Customize); }},
         {"SETTINGS", [this] { go(Screen::Settings); }},
         {"QUIT", [this] { if (window()) window()->requestClose(); }},
     };
-    float y = 440.0f;
+    float y = 420.0f;
     for (const auto& item : items) {
-        m_kit.button(m_root, UIElement::at({0.0f, 0.0f}, {x, y}, {470.0f, 72.0f}), item.text, item.act, big);
-        y += 88.0f;
+        m_kit.button(m_root, UIElement::at({0.0f, 0.0f}, {x, y}, {470.0f, 70.0f}), item.text, item.act, big);
+        y += 84.0f;
     }
 
     // Who is playing, bottom left.
@@ -550,7 +580,11 @@ void Menu::buildPaused() {
         {"Resume", [this] { go(Screen::Playing); }},
         {"Settings", [this] { go(Screen::Settings); }},
         {"Leave the match", [this] {
-            if (m_game) m_game->reset();
+            if (m_net) m_net->leave();
+            if (m_game) {
+                m_game->reset();
+                m_game->clearRemote();
+            }
             go(Screen::Main);
         }},
         {"Quit", [this] { if (window()) window()->requestClose(); }},
@@ -587,14 +621,135 @@ void Menu::buildOver() {
                     UIText::Align::Right);
         y += 66.0f;
     }
-    m_kit.button(panel, UIElement::at({0.0f, 1.0f}, {40.0f, -32.0f}, {320.0f, 64.0f}), "Main menu", [this] {
-        if (m_game) m_game->reset();
+    const bool online = m_net && m_net->online();
+    m_kit.button(panel, UIElement::at({0.0f, 1.0f}, {40.0f, -32.0f}, {320.0f, 64.0f}), online ? "Leave" : "Main menu", [this] {
+        if (m_net) m_net->leave();
+        if (m_game) {
+            m_game->reset();
+            m_game->clearRemote();
+        }
         go(Screen::Main);
     }, Style{Ui::FIELD, Ui::INK, 28.0f, 32.0f});
-    m_kit.button(panel, UIElement::at({1.0f, 1.0f}, {-40.0f, -32.0f}, {320.0f, 64.0f}), "Play again", [this] {
-        if (m_game) m_game->reset();
-        startMatch();
-    }, Style{Ui::GOLD, {0.08f, 0.07f, 0.06f, 1.0f}, 28.0f, 32.0f});
+    if (!online || m_net->isHost()) {
+        m_kit.button(panel, UIElement::at({1.0f, 1.0f}, {-40.0f, -32.0f}, {320.0f, 64.0f}), online ? "Back to the lobby" : "Play again", [this] {
+            if (m_net && m_net->online()) {
+                m_net->sendAgain();
+                return;
+            }
+            if (m_game) m_game->reset();
+            startMatch();
+        }, Style{Ui::GOLD, {0.08f, 0.07f, 0.06f, 1.0f}, 28.0f, 32.0f});
+    } else {
+        m_kit.label(panel, UIElement::at({1.0f, 1.0f}, {-40.0f, -32.0f}, {360.0f, 64.0f}), "The host decides what next", 22.0f, Ui::INK_DIM,
+                    UIText::Align::Right);
+    }
+}
+
+void Menu::buildOnline() {
+    const EntityId panel = card(UIElement::at({0.5f, 0.5f}, {0.0f, 0.0f}, {760.0f, 690.0f}), "PLAY ONLINE");
+    const EntityId body  = m_kit.group(panel, UIElement::at({0.0f, 0.0f}, {44.0f, 110.0f}, {672.0f, 460.0f}));
+    float y = 0.0f;
+    m_kit.heading(body, y, 672.0f, "HOST A GAME ON THIS MACHINE");
+    y += Kit::ROW;
+    Settings& settings = localSettings();
+    m_kit.fieldRow(body, y, 672.0f, "Port", settings.hostPort, 5, [](const std::string& port) { localSettings().hostPort = port; });
+    y += Kit::ROW + 8.0f;
+    m_kit.button(body, UIElement::at({0.0f, 0.0f}, {0.0f, y}, {672.0f, 58.0f}), "Host", [this] {
+        if (!m_net) return;
+        int port = 27750;
+        try {
+            port = std::stoi(localSettings().hostPort);
+        } catch (...) {
+        }
+        storeLocal();
+        m_net->host(static_cast<uint16_t>(std::clamp(port, 1024, 65535)));
+    }, Style{Ui::GOLD, {0.08f, 0.07f, 0.06f, 1.0f}, 26.0f, 29.0f});
+    y += 58.0f + 26.0f;
+    m_kit.heading(body, y, 672.0f, "JOIN A GAME");
+    y += Kit::ROW;
+    m_kit.fieldRow(body, y, 672.0f, "Address", settings.joinAddress, 40, [](const std::string& address) { localSettings().joinAddress = address; });
+    y += Kit::ROW + 8.0f;
+    m_kit.button(body, UIElement::at({0.0f, 0.0f}, {0.0f, y}, {672.0f, 58.0f}), "Join", [this] {
+        if (!m_net) return;
+        storeLocal();
+        m_net->join(localSettings().joinAddress);
+    }, Style{Ui::FIELD, Ui::INK, 26.0f, 29.0f});
+    y += 58.0f + 14.0f;
+    m_statusLabel = m_kit.label(body, UIElement::at({0.0f, 0.0f}, {0.0f, y}, {672.0f, 40.0f}), m_net ? m_net->status() : "", 22.0f, Ui::INK_DIM);
+
+    m_kit.button(panel, UIElement::at({0.0f, 1.0f}, {44.0f, -30.0f}, {220.0f, 60.0f}), "Back", [this] {
+        if (m_net) m_net->leave();
+        go(Screen::Main);
+    }, Style{Ui::FIELD, Ui::INK, 26.0f, 30.0f});
+}
+
+// The seats the server has, in their teams; you can switch side, the host can start.
+void Menu::buildLobby() {
+    if (!m_net) return;
+    m_seatsSeen = m_net->seatsVersion();
+    const MatchState* state = m_net->match();
+    const EntityId head = m_kit.panel(m_root, UIElement::at({0.5f, 0.0f}, {0.0f, 50.0f}, {760.0f, 130.0f}), Ui::GLASS, 30.0f);
+    m_kit.label(head, UIElement::at({0.5f, 0.0f}, {0.0f, 12.0f}, {740.0f, 72.0f}), "THE TABLE", 56.0f, Ui::GOLD, UIText::Align::Center);
+    m_kit.label(head, UIElement::at({0.5f, 0.0f}, {0.0f, 82.0f}, {740.0f, 34.0f}),
+                m_net->isHost() ? "You are the host: start when the teams are set" : "Waiting for the host to start", 24.0f, Ui::INK_DIM,
+                UIText::Align::Center);
+
+    const auto seats = m_net->seats();
+    int counts[2] = {0, 0};
+    for (const auto& [_, seat] : seats) ++counts[seat.side & 1];
+    constexpr float WIDE = 600.0f;
+    for (int side = 0; side < 2; ++side) {
+        const bool      white = side == 0;
+        const int       n     = counts[side];
+        const float     high  = 82.0f + 74.0f * static_cast<float>(std::max(n, 1)) + 16.0f;
+        const glm::vec4 ink   = white ? glm::vec4(0.1f, 0.1f, 0.12f, 1.0f) : Ui::INK;
+        const glm::vec4 fill  = white ? glm::vec4(0.84f, 0.81f, 0.76f, 1.0f) : glm::vec4(0.14f, 0.14f, 0.17f, 1.0f);
+        const EntityId  team  = m_kit.panel(m_root, UIElement::at({0.5f, 0.0f}, {white ? -320.0f : 320.0f, 210.0f}, {WIDE, high}),
+                                            white ? glm::vec4(0.93f, 0.91f, 0.86f, 0.94f) : glm::vec4(0.05f, 0.05f, 0.07f, 0.92f), 24.0f);
+        m_kit.label(team, UIElement::at({0.0f, 0.0f}, {28.0f, 18.0f}, {300.0f, 48.0f}), white ? "WHITE" : "BLACK", 40.0f, ink);
+        float y = 82.0f;
+        for (const auto& [index, seat] : seats) {
+            if ((seat.side & 1) != side) continue;
+            const bool     me  = seat.player == m_net->localPlayer();
+            const EntityId row = m_kit.panel(team, UIElement::at({0.0f, 0.0f}, {16.0f, y}, {WIDE - 32.0f, 64.0f}), fill, 16.0f);
+            m_kit.panel(row, UIElement::at({0.0f, 0.5f}, {14.0f, 0.0f}, {36.0f, 36.0f}), glm::vec4(hsv(seat.hue / 255.0f, 0.68f, 1.0f), 1.0f), 18.0f);
+            m_kit.label(row, UIElement::at({0.0f, 0.0f}, {66.0f, 0.0f}, {260.0f, 64.0f}), seat.name, 27.0f, ink);
+            std::string tags = me ? "YOU" : "";
+            if (state && seat.player == state->host) tags += tags.empty() ? "HOST" : "  HOST";
+            m_kit.label(row, UIElement::at({0.0f, 0.0f}, {300.0f, 0.0f}, {140.0f, 64.0f}), tags, 20.0f,
+                        white ? glm::vec4(0.62f, 0.4f, 0.05f, 1.0f) : Ui::GOLD);
+            if (me) {
+                const Style knob{white ? glm::vec4(0.74f, 0.71f, 0.66f, 1.0f) : glm::vec4(0.23f, 0.23f, 0.28f, 1.0f), ink, 20.0f, 12.0f};
+                m_kit.button(row, UIElement::at({0.0f, 0.0f}, {WIDE - 32.0f - 106.0f, 10.0f}, {92.0f, 44.0f}), "Switch", [this, side] {
+                    if (m_net) m_net->sendSide(1 - side);
+                }, knob);
+            }
+            y += 74.0f;
+        }
+        if (n == 0) m_kit.label(team, UIElement::at({0.0f, 0.0f}, {28.0f, y}, {WIDE - 56.0f, 64.0f}), "Nobody yet", 24.0f, glm::vec4(glm::vec3(ink), 0.5f));
+    }
+
+    // A guest's two buttons sit centred; the host's share the row with the turn time and START.
+    const Style plain{Ui::GLASS, Ui::INK, 28.0f, 34.0f};
+    const float shift = m_net->isHost() ? 0.0f : 380.0f;
+    m_kit.button(m_root, UIElement::at({0.5f, 1.0f}, {-520.0f + shift, -48.0f}, {220.0f, 70.0f}), "Leave", [this] {
+        if (m_net) m_net->leave();
+        go(Screen::Main);
+    }, plain);
+    m_kit.button(m_root, UIElement::at({0.5f, 1.0f}, {-250.0f + shift, -48.0f}, {260.0f, 70.0f}), "Customize", [this] { go(Screen::Customize); }, plain);
+    if (m_net->isHost()) {
+        const EntityId time = m_kit.panel(m_root, UIElement::at({0.5f, 1.0f}, {80.0f, -48.0f}, {360.0f, 70.0f}), Ui::GLASS, 34.0f);
+        Settings& settings = localSettings();
+        m_kit.choiceRow(time, 8.0f, 330.0f, "   Turn", labels(TURN_CHOICES, "s"), indexOf(TURN_CHOICES, settings.turnSeconds), [](int i) {
+            localSettings().turnSeconds = TURN_CHOICES[i];
+        });
+        const bool     ready = counts[0] > 0 && counts[1] > 0;
+        const EntityId start = m_kit.button(m_root, UIElement::at({0.5f, 1.0f}, {460.0f, -44.0f}, {300.0f, 78.0f}), "START", [this] {
+            const Settings& s = localSettings();
+            if (m_net) m_net->sendStart(static_cast<int>(s.turnSeconds), static_cast<int>(s.duelSeconds));
+        }, Style{Ui::GOLD, {0.08f, 0.07f, 0.06f, 1.0f}, 38.0f, 39.0f});
+        if (UIButton* press = scene().tryGet<UIButton>(start)) press->interactable = ready;
+    }
 }
 
 // The settings, to the renderer, the window, the keys, the world and the game.

@@ -28,3 +28,9 @@ add_executable(claims_tests tests/claims_tests.cpp src/claims.cpp src/profile.cp
 target_include_directories(claims_tests PRIVATE src)
 target_link_libraries(claims_tests PRIVATE vkmEngine::vkm_core)
 target_compile_features(claims_tests PRIVATE cxx_std_17)
+
+# What the server replicates: each component comes back as sent, and fits the wire.
+add_executable(net_state_tests tests/net_state_tests.cpp src/net_state.cpp src/profile.cpp)
+target_include_directories(net_state_tests PRIVATE src)
+target_link_libraries(net_state_tests PRIVATE vkmEngine::vkm_core)
+target_compile_features(net_state_tests PRIVATE cxx_std_17)

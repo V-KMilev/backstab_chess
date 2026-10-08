@@ -84,6 +84,9 @@ struct Settings {
     float lookSpeed    = 1.0f;
     float flySpeed     = 1.0f;
     bool  showHints    = true;
+    // Online, as last used
+    std::string hostPort    = "27750";
+    std::string joinAddress = "127.0.0.1";
     // Controls
     std::vector<KeyBinding> keys;
 };

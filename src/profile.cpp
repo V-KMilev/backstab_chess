@@ -192,6 +192,8 @@ void load(Profile& profile, Settings& settings) {
     read(s, "lookSpeed", settings.lookSpeed);
     read(s, "flySpeed", settings.flySpeed);
     read(s, "showHints", settings.showHints);
+    read(s, "hostPort", settings.hostPort);
+    read(s, "joinAddress", settings.joinAddress);
     if (s.contains("keys") && s["keys"].is_object()) {
         for (KeyBinding& binding : settings.keys) read(s["keys"], binding.action.c_str(), binding.key);
     }
@@ -248,6 +250,8 @@ void save(const Profile& profile, const Settings& settings) {
     s["lookSpeed"]   = settings.lookSpeed;
     s["flySpeed"]    = settings.flySpeed;
     s["showHints"]   = settings.showHints;
+    s["hostPort"]    = settings.hostPort;
+    s["joinAddress"] = settings.joinAddress;
     for (const KeyBinding& binding : settings.keys) s["keys"][binding.action] = binding.key;
     std::ofstream(folder() / "settings.json") << s.dump(2);
 }

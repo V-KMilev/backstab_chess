@@ -5,8 +5,10 @@
 #include <optional>
 
 #include "core/math/random.h"
+#include "ecs/component/render/camera.h"
 #include "ecs/component/render/light.h"
 #include "ecs/component/render/mesh.h"
+#include "net/net_session.h"
 #include "resource/asset/mesh_asset.h"
 #include "resource/generate/mesh_generators.h"
 
@@ -80,7 +82,25 @@ glm::vec3 anyAxis(Math::Rng& rng) {
 } // namespace
 
 void Scenery::onStart() {
+    if (net().role() == NetRole::Server) {
+        m_off = true;
+        return;
+    }
     ResourceManager& res = resources();
+
+    // The sun, which the sky aims, and the camera the game moves.
+    const EntityId sun = spawn("Sun");
+    scene().add(sun, Transform{});
+    Light sunLight{};
+    sunLight.type           = LightType::Directional;
+    sunLight.shadowDistance = 40.0f;
+    scene().add(sun, sunLight);
+    const EntityId camera = spawn("Camera");
+    scene().add(camera, Transform{});
+    Camera lens{};
+    lens.fovY = glm::radians(50.0f);
+    scene().add(camera, lens);
+
     res.add(generateCylinder(0.5f, 1.0f, 96), "scenery:drum");
     res.add(generateSphere(32, 16), "scenery:ball");
     res.add(generateCube(), "scenery:block");
@@ -94,12 +114,14 @@ void Scenery::onStart() {
 }
 
 void Scenery::setDetail(int detail) {
+    if (m_off) return;
     MeshAsset sea = Sea::mesh(m_swellRest, detail);
     if (m_swell) resources().swapValue(m_swell, sea);
     m_detail = detail;
 }
 
 void Scenery::onUpdate(float dt) {
+    if (m_off) return;
     m_time += dt;
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
     for (const Drifter& d : m_drifters) {

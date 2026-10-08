@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "chess/match.h"
 #include "chess_look.h"
 #include "claims.h"
+#include "net_state.h"
 #include "profile.h"
 #include "ui_kit.h"
 #include "takes.h"
@@ -72,6 +74,25 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
         /// Whether the local player's clicks and keys reach the game: off under a menu.
         void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
+
+        /// Online, where the server decides: this player's moves and duel stops go to it, and
+        /// what is played comes back as actions to replay.
+        struct Remote {
+            std::function<void(const Chess::Move&)> move;
+            std::function<void(uint8_t, float)>     stop;  ///< Which duel, and when the needle stopped.
+        };
+        void setRemote(Remote remote) { m_remote = std::move(remote); }
+        void clearRemote() { m_remote.reset(); }
+        bool remote() const { return m_remote.has_value(); }
+
+        /// An action the server played: a move tried, or a duel settled.
+        void applyAction(const Action& action);
+
+        /// The other duelist's needle, stopped @p seconds into the duel.
+        void applyStop(int duelist, float seconds);
+
+        /// How many duels this match has opened: a stop names the one it is for.
+        uint8_t duelsOpened() const { return m_duelsOpened; }
 
     public:
         float moveSeconds  = 0.45f;  ///< How long a piece takes from one square to the next.
@@ -220,7 +241,10 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
     private:
         std::optional<Chess::Match> m_match;
+        std::optional<Remote>       m_remote;
+        uint8_t                     m_duelsOpened = 0;
         bool                        m_inputEnabled = true;
+        bool                        m_off = false;  ///< On a server, which shows nothing.
         EntityId                    m_hud;
         std::vector<PlayerSetup>    m_setups;
         float                       m_orbit = 0.0f;  ///< Round the table, before the match.

@@ -14,6 +14,7 @@ namespace Game {
 
 using namespace Vkm::Engine;
 
+class NetLink;
 class Scenery;
 class Showcase;
 
@@ -30,16 +31,24 @@ class Menu : public ReflectedBehavior<Menu> {
         void onStart() override;
         void onUpdate(float dt) override;
 
-        /// The game the menu sets up and starts, the stand customizing shows on, the world.
-        void link(ChessGame* game, Showcase* showcase, Scenery* scenery);
+        /// The game the menu sets up and starts, the stand customizing shows on, the world, the network.
+        void link(ChessGame* game, Showcase* showcase, Scenery* scenery, NetLink* net);
+
+        // What the network says.
+        void onlineJoined();
+        void onlineFailed();
+        void onlineGameStarted();
+        void onlineLobby();
 
     private:
-        enum class Screen { Main, Play, Customize, Settings, Paused, Over, Playing };
+        enum class Screen { Main, Play, Online, Lobby, Customize, Settings, Paused, Over, Playing };
 
         void go(Screen screen);
         void build();
         void buildMain();
         void buildPlay();
+        void buildOnline();
+        void buildLobby();
         void buildCustomize();
         void buildSettings();
         void buildPaused();
@@ -58,6 +67,8 @@ class Menu : public ReflectedBehavior<Menu> {
         ChessGame* m_game     = nullptr;
         Showcase*  m_showcase = nullptr;
         Scenery*   m_scenery  = nullptr;
+        NetLink*   m_net      = nullptr;
+        bool       m_off      = false;      ///< On a server, which shows nothing.
 
         Ui::Kit       m_kit;
         Screen        m_screen = Screen::Main;
@@ -75,6 +86,9 @@ class Menu : public ReflectedBehavior<Menu> {
         bool  m_fullscreen  = false;            ///< As last applied.
         int   m_seaDetail   = -1;               ///< As last applied.
         float m_overDelay   = 0.0f;
+        Screen      m_customReturn = Screen::Main;  ///< Where customizing goes back to.
+        EntityId    m_statusLabel;
+        uint32_t    m_seatsSeen = 0;
 };
 
 } // namespace Game
