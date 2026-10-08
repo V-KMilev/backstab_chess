@@ -8,6 +8,7 @@
 #include "world.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iterator>
 #include <string>
@@ -25,6 +26,7 @@
 #include "resource/asset/mesh_asset.h"
 #include "resource/asset/texture_asset.h"
 #include "resource/generate/mesh_generators.h"
+#include "system/ui/ui_events.h"
 
 namespace Game {
 
@@ -147,11 +149,16 @@ void ChessGame::onStart() {
     map.define(ACTION_LOOK, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_RIGHT, 1.0f}});
     map.define(ACTION_SEAT, {InputBinding{InputSource::Key, GLFW_KEY_F, 1.0f}});
     map.define(ACTION_DUEL, {InputBinding{InputSource::Key, GLFW_KEY_SPACE, 1.0f}});
+    m_kit.bind(scene(), resources(), input(),
+               [this](const char* name, EntityId parent) { return spawn(name, parent); },
+               [this](EntityId id) { destroy(id); });
+    subscribe([this](const UIClickEvent& click) { m_kit.click(click.eventId); });
     for (const Fly& fly : FLY) map.define(fly.action, {InputBinding{InputSource::Key, fly.key, 1.0f}});
 
     resources().add(generateCylinder(0.5f, 1.0f, 40), "chess:disc");
     resources().add(Shapes::ring(0.72f, 48), "chess:ring");
     resources().add(generateSphere(16, 8), "chess:heart");
+    resources().add(generateCube(), "chess:cube");
 
     spawnTable();
     spawnPieces();
@@ -230,6 +237,11 @@ void ChessGame::reset() {
     m_trophies.clear();
     m_hearts = {};
     closeNeedle();
+    closePicker();
+    for (EntityId& mark : m_lastMarks) {
+        if (mark) destroy(mark);
+        mark = {};
+    }
     m_pieces.fill({});
     m_selected = Chess::NO_SQUARE;
     m_duelTime = -1.0f;
@@ -284,6 +296,7 @@ void ChessGame::attract(float dt) {
 }
 
 void ChessGame::onUpdate(float dt) {
+    m_kit.update(dt);
     if (!m_match) {
         attract(dt);
         return;
@@ -300,7 +313,7 @@ void ChessGame::onUpdate(float dt) {
 
     // A click lands only on the local player's turn, once the last move has and the view has
     // reached the seat. The others' turns are theirs, or a debugging bot's.
-    const bool ready = settled() && m_travel >= 1.0f && m_duelTime < 0.0f && m_lapse >= 1.0f && !m_match->over();
+    const bool ready = settled() && m_travel >= 1.0f && m_duelTime < 0.0f && m_lapse >= 1.0f && !m_match->over() && !m_picker;
     if (!m_inputEnabled && m_match->current() == m_viewer) return;
     if (!ready) return;
     if (m_match->current() == m_viewer) {
@@ -541,14 +554,18 @@ void ChessGame::click(Square square) {
     const Chess::Position& position = m_match->position();
 
     if (m_selected != Chess::NO_SQUARE && square != Chess::NO_SQUARE) {
-        // A pawn reaching the last rank becomes a queen until there is a way to ask.
-        const auto choice = std::find_if(m_choices.begin(), m_choices.end(), [&](const Chess::Move& m) {
-            return m.to == square && (m.promotion == PieceType::None || m.promotion == PieceType::Queen);
-        });
-        if (choice != m_choices.end()) {
-            const Chess::Move move = *choice;
+        std::vector<Chess::Move> moves;
+        for (const Chess::Move& m : m_choices) {
+            if (m.to == square) moves.push_back(m);
+        }
+        if (moves.size() > 1) {
+            // A pawn reaching the last rank: asked what it becomes.
+            openPicker(moves);
+            return;
+        }
+        if (moves.size() == 1) {
             clearChoices();
-            tryMove(move);
+            tryMove(moves.front());
             return;
         }
     }
@@ -561,6 +578,50 @@ void ChessGame::click(Square square) {
 }
 
 // Blue squares are plain moves; red ones are duels, for a teammate's piece or an enemy's.
+// What a pawn on the last rank becomes, asked in a row of four.
+void ChessGame::openPicker(const std::vector<Chess::Move>& moves) {
+    closePicker();
+    if (!m_hud) return;
+    m_picker = m_kit.panel(m_hud, UIElement::at({0.5f, 0.62f}, {0.0f, 0.0f}, {620.0f, 170.0f}), Ui::GLASS, 24.0f,
+                           glm::vec4(glm::vec3(Ui::GOLD), 0.3f), 1.5f);
+    m_kit.label(m_picker, UIElement::at({0.5f, 0.0f}, {0.0f, 14.0f}, {580.0f, 44.0f}), "Promote to", 30.0f, Ui::GOLD, UIText::Align::Center);
+    const PieceType ORDER[] = {PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight};
+    float x = 30.0f;
+    for (const PieceType type : ORDER) {
+        const auto move = std::find_if(moves.begin(), moves.end(), [&](const Chess::Move& m) { return m.promotion == type; });
+        if (move == moves.end()) continue;
+        const Chess::Move chosen = *move;
+        std::string name = pieceName(type);
+        name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+        m_kit.button(m_picker, UIElement::at({0.0f, 0.0f}, {x, 76.0f}, {130.0f, 64.0f}), name, [this, chosen] {
+            closePicker();
+            clearChoices();
+            tryMove(chosen);
+        }, Ui::Style{Ui::FIELD, Ui::INK, 26.0f, 14.0f});
+        x += 142.0f;
+    }
+}
+
+void ChessGame::closePicker() {
+    if (m_picker) destroy(m_picker);
+    m_picker = {};
+}
+
+// The squares the last move left and reached, marked faintly till the next.
+void ChessGame::markLastMove(const Chess::Move& move) {
+    ResourceManager& res = resources();
+    const Square ends[] = {move.from, move.to};
+    for (size_t i = 0; i < 2; ++i) {
+        if (m_lastMarks[i]) destroy(m_lastMarks[i]);
+        m_lastMarks[i] = spawn("Last Move");
+        scene().add(m_lastMarks[i], Transform{squareCentre(ends[i]) + glm::vec3(0.0f, 0.002f, 0.0f), {1.0f, 0.0f, 0.0f, 0.0f},
+                                              {SQUARE * 0.98f, 0.004f, SQUARE * 0.98f}});
+        Mesh mark{res.findByName<MeshAsset>("chess:cube"), ChessLook::last(res)};
+        mark.castShadows = false;
+        scene().add(m_lastMarks[i], std::move(mark));
+    }
+}
+
 void ChessGame::showChoices(Square square) {
     const Chess::Position& position = m_match->position();
     m_selected = square;
@@ -838,6 +899,7 @@ void ChessGame::timeOut() {
 }
 
 void ChessGame::showMove(const Chess::Move& move, const Chess::Position& before) {
+    markLastMove(move);
     const auto   idx   = [](Square s) { return static_cast<size_t>(s); };
     const Square taken = before.takenBy(move);
 

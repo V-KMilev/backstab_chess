@@ -12,6 +12,7 @@
 #include "chess_look.h"
 #include "claims.h"
 #include "profile.h"
+#include "ui_kit.h"
 #include "takes.h"
 
 namespace Game {
@@ -179,6 +180,9 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void animateHints(float dt);
 
         void click(Chess::Square square);
+        void openPicker(const std::vector<Chess::Move>& moves);
+        void closePicker();
+        void markLastMove(const Chess::Move& move);
         void playBot(float dt);
         void showChoices(Chess::Square square);
         void clearChoices();
@@ -263,6 +267,10 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             std::array<EntityId, 2> result{};
         };
         NeedleDuel m_needle;
+
+        Ui::Kit                  m_kit;         ///< The match's own widgets: the promotion picker.
+        EntityId                 m_picker;      ///< Asking what a pawn becomes, while it is open.
+        std::array<EntityId, 2>  m_lastMarks{}; ///< The last move's squares.
 
         /// The hearts over each king, a life each: white's, then black's.
         std::array<std::vector<EntityId>, 2> m_hearts;

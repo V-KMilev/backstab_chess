@@ -267,6 +267,13 @@ void build(ResourceManager& resources) {
     hint.roughness        = 0.4f;
     add(resources, hint, "chess:hint");
 
+    // The last move's two squares, faintly.
+    MaterialAsset last = hint;
+    last.albedo           = {1.0f, 0.82f, 0.45f, 0.22f};
+    last.emission         = {1.0f, 0.82f, 0.45f};
+    last.emissiveStrength = 0.6f;
+    add(resources, last, "chess:last");
+
     MaterialAsset chosen = hint;
     chosen.albedo   = {1.0f, 0.72f, 0.3f, 0.65f};
     chosen.emission = {1.0f, 0.72f, 0.3f};
@@ -394,6 +401,7 @@ const char* pieceMesh(Chess::PieceType type) {
         default:                       return "";
     }
 }
+MaterialHandle last(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:last"); }
 MaterialHandle duel(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:duel"); }
 
 } // namespace ChessLook

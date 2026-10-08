@@ -63,6 +63,7 @@ const char* pieceMesh(Chess::PieceType type);
 MaterialHandle hint(ResourceManager& resources);    ///< A square a selected piece may move to.
 MaterialHandle chosen(ResourceManager& resources);  ///< The selected piece's square.
 MaterialHandle duel(ResourceManager& resources);    ///< A square only a duel can reach.
+MaterialHandle last(ResourceManager& resources);    ///< The squares the last move left and reached.
 
 } // namespace ChessLook
 
