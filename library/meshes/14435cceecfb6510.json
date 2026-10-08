@@ -1,0 +1,8 @@
+{
+  "name": "chess:board",
+  "source": {
+    "kind": "model",
+    "mesh": 7,
+    "path": "assets/chess_set/chess_set_2k.gltf"
+  }
+}

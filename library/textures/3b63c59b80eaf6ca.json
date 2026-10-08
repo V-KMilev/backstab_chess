@@ -1,0 +1,10 @@
+{
+  "name": "assets/chess_set/textures/chess_set_pieces_black_arm_2k.jpg",
+  "source": {
+    "generateMipmaps": true,
+    "kind": "file",
+    "path": "assets/chess_set/textures/chess_set_pieces_black_arm_2k.jpg",
+    "usage": "Data",
+    "wrap": "repeat"
+  }
+}

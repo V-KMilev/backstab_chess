@@ -1,0 +1,8 @@
+{
+  "name": "chess:pawn",
+  "source": {
+    "kind": "model",
+    "mesh": 1,
+    "path": "assets/chess_set/chess_set_2k.gltf"
+  }
+}

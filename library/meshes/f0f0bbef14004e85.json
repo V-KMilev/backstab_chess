@@ -1,0 +1,8 @@
+{
+  "name": "chess:rook",
+  "source": {
+    "kind": "model",
+    "mesh": 0,
+    "path": "assets/chess_set/chess_set_2k.gltf"
+  }
+}

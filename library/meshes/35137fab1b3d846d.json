@@ -1,0 +1,8 @@
+{
+  "name": "chess:knight",
+  "source": {
+    "kind": "model",
+    "mesh": 6,
+    "path": "assets/chess_set/chess_set_2k.gltf"
+  }
+}
