@@ -1,5 +1,6 @@
 #include "chess_look.h"
 
+#include <algorithm>
 #include <string>
 
 #include "resource/asset/material_asset.h"
@@ -32,6 +33,37 @@ MaterialAsset textured(ResourceManager& resources, const char* part) {
     m.normalTexture              = texture(resources, part, "nor_gl");
     m.aoMetallicRoughnessTexture = texture(resources, part, "arm");
     return m;
+}
+
+// Two squares by two of the plain's chessboard, to repeat: pale stone and dark, with a fine
+// seam between them.
+TextureAsset checker() {
+    constexpr uint32_t SIZE = 256;
+    constexpr uint32_t HALF = SIZE / 2;
+    TextureAsset texture;
+    texture.params.width          = SIZE;
+    texture.params.height         = SIZE;
+    texture.params.internalFormat = TextureInternalFormat::SRGBA8;
+    texture.params.format         = TexturePixelFormat::RGBA;
+    texture.params.wrapS          = TextureWrapMode::Repeat;
+    texture.params.wrapT          = TextureWrapMode::Repeat;
+    texture.pixelData.resize(SIZE * SIZE * 4);
+    for (uint32_t y = 0; y < SIZE; ++y) {
+        for (uint32_t x = 0; x < SIZE; ++x) {
+            const bool     light = ((x / HALF) + (y / HALF)) % 2 == 0;
+            const uint32_t edgeX = std::min(x % HALF, HALF - 1 - x % HALF);
+            const uint32_t edgeY = std::min(y % HALF, HALF - 1 - y % HALF);
+            const bool     seam  = std::min(edgeX, edgeY) < 2;
+            uint8_t v = light ? 92 : 30;
+            if (seam) v = 20;
+            uint8_t* texel = &texture.pixelData[(y * SIZE + x) * 4];
+            texel[0] = v;
+            texel[1] = static_cast<uint8_t>(v * 0.97f);
+            texel[2] = static_cast<uint8_t>(v * 0.93f);
+            texel[3] = 255;
+        }
+    }
+    return texture;
 }
 
 void add(ResourceManager& resources, MaterialAsset material, const std::string& name) {
@@ -115,11 +147,33 @@ void build(ResourceManager& resources) {
     table.clearcoatRoughness = 0.35f;  // satin: the lamp spreads into a sheen, not a second bulb
     add(resources, table, "chess:table");
 
-    // The plain the table stands on: dark and wet, a mirror for the sky.
+    // The plain the table stands on: a chessboard to the horizon, under a skin of water that
+    // mirrors the sky.
     MaterialAsset floor;
-    floor.albedo    = {0.03f, 0.03f, 0.035f, 1.0f};
-    floor.roughness = 0.06f;
+    floor.albedo        = {1.0f, 1.0f, 1.0f, 1.0f};
+    floor.albedoTexture = resources.add(checker(), "chess:checker");
+    floor.roughness     = 0.05f;
     add(resources, floor, "chess:floor");
+
+    MaterialAsset brass;
+    brass.albedo    = {0.86f, 0.64f, 0.32f, 1.0f};
+    brass.metallic  = 1.0f;
+    brass.roughness = 0.28f;
+    add(resources, brass, "chess:brass");
+
+    // The leather inlay the board sits on.
+    MaterialAsset leather;
+    leather.albedo         = {0.012f, 0.04f, 0.024f, 1.0f};
+    leather.roughness      = 0.7f;
+    leather.sheenColor     = {0.05f, 0.12f, 0.08f};
+    leather.sheenRoughness = 0.4f;
+    add(resources, leather, "chess:leather");
+
+    // The far mountains: dark, rough stone the haze greys.
+    MaterialAsset rock;
+    rock.albedo    = {0.16f, 0.15f, 0.15f, 1.0f};
+    rock.roughness = 0.9f;
+    add(resources, rock, "chess:rock");
 
     // The hints glow faintly through the board's lacquer, rather than sit on it as decals.
     MaterialAsset hint;
@@ -150,6 +204,23 @@ MaterialHandle table(ResourceManager& resources)  { return resources.findByName<
 MaterialHandle hint(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:hint"); }
 MaterialHandle chosen(ResourceManager& resources) { return resources.findByName<MaterialAsset>("chess:chosen"); }
 MaterialHandle floor(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:floor"); }
+MaterialHandle brass(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:brass"); }
+MaterialHandle rock(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:rock"); }
+MaterialHandle leather(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:leather"); }
+MaterialHandle tileLight(ResourceManager& resources) { return piece(resources, PieceSet::Stone, Chess::Color::White); }
+MaterialHandle tileDark(ResourceManager& resources)  { return piece(resources, PieceSet::Stone, Chess::Color::Black); }
+
+const char* pieceMesh(Chess::PieceType type) {
+    switch (type) {
+        case Chess::PieceType::Pawn:   return "chess:pawn";
+        case Chess::PieceType::Knight: return "chess:knight";
+        case Chess::PieceType::Bishop: return "chess:bishop";
+        case Chess::PieceType::Rook:   return "chess:rook";
+        case Chess::PieceType::Queen:  return "chess:queen";
+        case Chess::PieceType::King:   return "chess:king";
+        default:                       return "";
+    }
+}
 MaterialHandle duel(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:duel"); }
 
 } // namespace ChessLook

@@ -2,6 +2,8 @@
 
 #include "chess_game.h"
 
+#include "world.h"
+
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -29,16 +31,10 @@ using Chess::PieceType;
 using Chess::Square;
 
 // The set is modelled life size, its board 55 cm across; the world is ten times that.
-constexpr float WORLD_SCALE = 10.0f;
 constexpr float SQUARE      = 0.058f * WORLD_SCALE;
 constexpr float BOARD_TOP   = 0.017f * WORLD_SCALE;
 constexpr float BOARD_HALF  = 0.277f * WORLD_SCALE;
 
-// The table, 1.4 by 1 metres and 75 cm high, and the plain round it.
-const glm::vec2 TABLE_HALF      = {7.0f, 5.0f};
-constexpr float TABLE_THICKNESS = 0.5f;
-constexpr float FLOOR_DEPTH     = 7.5f;
-constexpr float FLOOR_SIZE      = 1200.0f;
 
 constexpr const char* ACTION_SELECT = "chess/select";
 constexpr const char* ACTION_LOOK   = "chess/look";
@@ -114,18 +110,6 @@ const glm::vec3 PALETTE[] = {
 // What each player's pieces become, by their place in their side's order.
 const PieceSet SKINS[] = {PieceSet::Metal, PieceSet::Glass, PieceSet::Stone};
 
-const char* meshName(PieceType type) {
-    switch (type) {
-        case PieceType::Pawn:   return "chess:pawn";
-        case PieceType::Knight: return "chess:knight";
-        case PieceType::Bishop: return "chess:bishop";
-        case PieceType::Rook:   return "chess:rook";
-        case PieceType::Queen:  return "chess:queen";
-        case PieceType::King:   return "chess:king";
-        default:                return "";
-    }
-}
-
 const char* pieceName(PieceType type) {
     switch (type) {
         case PieceType::Pawn:   return "pawn";
@@ -190,7 +174,6 @@ void ChessGame::onStart() {
     m_trophies.assign(m_match->players().size(), 0);
 
     spawnTable();
-    spawnScenery();
     spawnPlayers();
     spawnPieces();
     spawnHud();
@@ -232,27 +215,6 @@ void ChessGame::spawnTable() {
     scene().add(board, Transform{{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(WORLD_SCALE)});
     scene().add(board, Mesh{res.findByName<MeshAsset>("chess:board"), ChessLook::board(res)});
 
-    // The table: a top the board and the trophies stand on, on four legs over the plain.
-    const MeshHandle cube = res.add(generateCube(), "chess:cube");
-    const MeshHandle leg  = res.add(generateCylinder(0.5f, 1.0f, 24), "chess:leg");
-    const auto slab = [&](const char* name, MeshHandle mesh, MaterialHandle material, const glm::vec3& at,
-                          const glm::vec3& size) {
-        const EntityId id = spawn(name);
-        scene().add(id, Transform{at, {1.0f, 0.0f, 0.0f, 0.0f}, size});
-        scene().add(id, Mesh{mesh, material});
-    };
-    slab("Table", cube, ChessLook::table(res), {0.0f, -TABLE_THICKNESS * 0.5f, 0.0f},
-         {TABLE_HALF.x * 2.0f, TABLE_THICKNESS, TABLE_HALF.y * 2.0f});
-    for (const glm::vec2 corner : {glm::vec2(-1.0f, -1.0f), glm::vec2(1.0f, -1.0f), glm::vec2(-1.0f, 1.0f), glm::vec2(1.0f, 1.0f)}) {
-        const float height = FLOOR_DEPTH - TABLE_THICKNESS;
-        const EntityId id  = spawn("Table Leg");
-        scene().add(id, Transform{{corner.x * (TABLE_HALF.x - 0.9f), -TABLE_THICKNESS - height * 0.5f, corner.y * (TABLE_HALF.y - 0.9f)},
-                                  {1.0f, 0.0f, 0.0f, 0.0f}, {0.7f, height, 0.7f}});
-        scene().add(id, Mesh{leg, ChessLook::table(res)});
-    }
-    const MeshHandle plain = res.add(generatePlane(1.0f, 1.0f), "chess:plain");
-    slab("Floor", plain, ChessLook::floor(res), {0.0f, -FLOOR_DEPTH, 0.0f}, {FLOOR_SIZE, 1.0f, FLOOR_SIZE});
-
     // The lamp over the table, pointing down; updateSun turns it up at night.
     m_lamp = spawn("Lamp");
     scene().add(m_lamp, Transform{{0.0f, 7.5f, 0.0f}, glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f)});
@@ -265,54 +227,6 @@ void ChessGame::spawnTable() {
     lamp.outerConeAngle = glm::radians(48.0f);
     lamp.sourceRadius   = 0.35f;
     scene().add(m_lamp, lamp);
-}
-
-// Colossal pieces standing in the plain, some sunk and some fallen, against the sky all round.
-void ChessGame::spawnScenery() {
-    struct Colossus {
-        float     azimuth;   ///< Degrees round from +Z toward +X.
-        float     distance;  ///< From the table, in metres.
-        PieceType type;
-        float     scale;     ///< Times life size.
-        float     tilt;      ///< Degrees fallen over.
-        float     sink;      ///< Metres below the plain its base stands.
-        PieceSet  set;
-        Color     side;
-    };
-    const Colossus COLOSSI[] = {
-        {18.0f, 260.0f, PieceType::King, 1500.0f, 0.0f, 10.0f, PieceSet::Stone, Color::White},
-        {62.0f, 380.0f, PieceType::Queen, 2300.0f, 4.0f, 30.0f, PieceSet::Stone, Color::Black},
-        {104.0f, 170.0f, PieceType::Rook, 750.0f, 0.0f, 6.0f, PieceSet::Stone, Color::Black},
-        {148.0f, 290.0f, PieceType::Knight, 1500.0f, 0.0f, 15.0f, PieceSet::Stone, Color::White},
-        {196.0f, 210.0f, PieceType::Pawn, 900.0f, 84.0f, 0.0f, PieceSet::Classic, Color::Black},
-        {232.0f, 440.0f, PieceType::Bishop, 2500.0f, 0.0f, 50.0f, PieceSet::Stone, Color::White},
-        {287.0f, 200.0f, PieceType::Rook, 1000.0f, 11.0f, 14.0f, PieceSet::Stone, Color::White},
-        {326.0f, 350.0f, PieceType::King, 2000.0f, 0.0f, 40.0f, PieceSet::Stone, Color::Black},
-        {352.0f, 170.0f, PieceType::Pawn, 650.0f, 0.0f, 5.0f, PieceSet::Classic, Color::White},
-    };
-    ResourceManager& res = resources();
-    for (const Colossus& c : COLOSSI) {
-        const float     a  = glm::radians(c.azimuth);
-        const glm::vec3 at = {std::sin(a) * c.distance, -FLOOR_DEPTH - c.sink, std::cos(a) * c.distance};
-        // A fallen one lies on its side, its radius up off the plain.
-        const float     lying = c.tilt > 45.0f ? 0.015f * c.scale : 0.0f;
-        const glm::quat turn  = glm::angleAxis(a, glm::vec3(0.0f, 1.0f, 0.0f))
-            * glm::angleAxis(glm::radians(c.tilt), glm::vec3(0.0f, 0.0f, 1.0f));
-        const EntityId id = spawn("Colossus");
-        scene().add(id, Transform{at + glm::vec3(0.0f, lying, 0.0f), turn, glm::vec3(c.scale)});
-        // No shadows: a low sun would lay a colossus's across the whole table.
-        const MaterialHandle stone = ChessLook::piece(res, c.set, c.side);
-        Mesh body{res.findByName<MeshAsset>(meshName(c.type)), stone};
-        body.castShadows = false;
-        scene().add(id, std::move(body));
-        if (c.type == PieceType::Bishop) {
-            const EntityId top = spawn("Colossus Top", id);
-            scene().add(top, Transform{});
-            Mesh ball{res.findByName<MeshAsset>("chess:bishop_top"), stone};
-            ball.castShadows = false;
-            scene().add(top, std::move(ball));
-        }
-    }
 }
 
 void ChessGame::spawnPlayers() {
@@ -380,7 +294,7 @@ EntityId ChessGame::spawnPiece(Chess::Piece piece, Square square) {
         : glm::angleAxis(glm::pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
     DrawnPiece drawn;
     drawn.side = piece.color;
-    drawn.body = spawn(meshName(piece.type));
+    drawn.body = spawn(ChessLook::pieceMesh(piece.type));
     scene().add(drawn.body, Transform{squareCentre(square), facing, glm::vec3(WORLD_SCALE)});
     scene().add(drawn.body, Mesh{});
 
@@ -402,7 +316,7 @@ void ChessGame::setMesh(DrawnPiece& drawn, PieceType type) {
     ResourceManager& res = resources();
     Mesh* mesh = scene().tryGet<Mesh>(drawn.body);
     if (!mesh) return;
-    mesh->mesh = res.findByName<MeshAsset>(meshName(type));
+    mesh->mesh = res.findByName<MeshAsset>(ChessLook::pieceMesh(type));
 
     // A bishop's ball is a mesh of its own, carried as a child.
     if (type == PieceType::Bishop && !drawn.top) {
@@ -769,7 +683,7 @@ glm::vec3 ChessGame::trophySpot(int taker) {
     const float near  = seat.eye.z < 0.0f ? -1.0f : 1.0f;
     const float x     = seat.eye.x + (static_cast<float>(col) - 0.5f * static_cast<float>(PER_ROW - 1)) * GAP;
     return {
-        std::clamp(x, -TABLE_HALF.x + 0.4f, TABLE_HALF.x - 0.4f),
+        std::clamp(x, -TABLE_RADIUS + 1.6f, TABLE_RADIUS - 1.6f),
         0.0f,
         near * (BOARD_HALF + 0.6f + GAP * static_cast<float>(row)),
     };

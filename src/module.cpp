@@ -9,13 +9,14 @@
 
 #include "chess_game.h"
 #include "chess_look.h"
+#include "scenery.h"
 
 VKM_MODULE_ENTRY
 const char* vkmModuleEngineVersion() { return VKM_ENGINE_VERSION; }
 
 VKM_MODULE_ENTRY
 void vkmRegisterBehaviors() {
-    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar>();
+    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar, Game::Scenery>();
 }
 
 VKM_MODULE_ENTRY
@@ -67,6 +68,10 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
     Camera lens{};
     lens.fovY = glm::radians(50.0f);
     scene.add(camera, lens);
+
+    const EntityId world = scene.createEntity();
+    scene.add(world, makeName("World"));
+    addBehavior<Game::Scenery>(scene, world);
 
     const EntityId game = scene.createEntity();
     scene.add(game, makeName("Chess"));

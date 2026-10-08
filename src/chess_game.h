@@ -96,7 +96,6 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
     private:
         void spawnTable();
-        void spawnScenery();
         void spawnPlayers();
         void spawnPieces();
         void spawnHud();
