@@ -75,6 +75,10 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             glm::vec3      eye    = {0.0f, 0.0f, 0.0f};
             float          yaw    = 0.0f;
             float          pitch  = 0.0f;
+            // Where the player left their view, which their next turn returns them to.
+            glm::vec3      viewEye   = {0.0f, 0.0f, 0.0f};
+            float          viewYaw   = 0.0f;
+            float          viewPitch = 0.0f;
             glm::vec3      color  = {1.0f, 1.0f, 1.0f};
             PieceSet       skin   = PieceSet::Classic;
             TakeStyle      takes  = TakeStyle::Float;  ///< How the pieces they take leave the board.
@@ -87,6 +91,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             EntityId tile;
             EntityId name;
             EntityId points;
+            float    y = 0.0f;  ///< Where the tile is, sliding to its place in the order.
         };
 
     private:
@@ -108,6 +113,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void tryMove(const Chess::Move& move);
         void startDuel(const std::string& title);
         void settleDuel(float dt);
+        void finishDuel(bool challengerWon);
         void showMove(const Chess::Move& move, const Chess::Position& before);
         void advanceGlides(float dt);
         void startTake(EntityId piece, int taker);
@@ -123,8 +129,9 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void updateCamera(float dt);
         void updateAvatars();
         void updateHud(float dt);
-        void showBanner(const std::string& title, const std::string& detail, float seconds);
+        void showNews(const std::string& title, const std::string& detail, float seconds, const glm::vec4& accent);
         const char* nameOf(int player) const;
+        glm::vec4 seatColor(int player) const;
 
     private:
         std::optional<Chess::Match> m_match;
@@ -156,10 +163,8 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         float    m_sun        = 0.0f;
         float    m_turnStart  = 0.0f;  ///< Where this turn's sun began.
         float    m_turnEnd    = 0.0f;  ///< Where it ends it.
-        float    m_skipFrom   = 0.0f;  ///< Where the sun was when it hurried on to this turn.
-        float    m_skip       = 1.0f;  ///< 0..1 through that hurry.
-        float    m_skipTime   = 1.0f;  ///< Its length, in seconds: a whole night passes slower.
-        float    m_duelFrom   = 0.0f;  ///< Where the sun was when the duel began.
+        float    m_blink      = 1.0f;  ///< 0..1 through the blink the sun jumps to this turn in.
+        EntityId m_fade;               ///< What the screen dips to for it.
         EntityId m_lamp;
 
         /// A mark on the dial's faces, where it sits with the sun's half on top.
@@ -178,10 +183,14 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         EntityId              m_turnName;
         EntityId              m_turnDetail;
         float                 m_hudTime = 0.0f;  ///< For the last seconds' pulse.
-        EntityId              m_banner;
-        EntityId              m_bannerTitle;
-        EntityId              m_bannerDetail;
-        float                 m_bannerTime = 0.0f;  ///< Seconds the banner has left.
+        // News - a duel, its outcome, a sunset - takes over the turn card for a moment, in its
+        // own colour.
+        EntityId              m_card;
+        std::string           m_newsTitle;
+        std::string           m_newsDetail;
+        float                 m_newsTime   = 0.0f;  ///< Seconds the news has left.
+        float                 m_newsLength = 0.0f;  ///< Seconds it is shown for.
+        glm::vec4             m_newsAccent = {1.0f, 1.0f, 1.0f, 1.0f};
         std::vector<ScoreRow> m_scoreRows;
 };
 

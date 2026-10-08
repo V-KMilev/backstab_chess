@@ -63,17 +63,17 @@ void build(ResourceManager& resources) {
     MaterialAsset clear;
     clear.type            = MaterialType::Transparent;
     // Thick, like a paperweight: the body tints what it bends.
-    clear.albedo              = {0.8f, 0.9f, 1.0f, 0.6f};
+    clear.albedo              = {0.78f, 0.88f, 1.0f, 0.75f};
     clear.roughness           = 0.03f;
-    clear.transmission        = 0.7f;
-    clear.ior                 = 1.5f;
-    clear.thicknessFactor     = 0.6f;
+    clear.transmission        = 0.55f;
+    clear.ior                 = 1.6f;
+    clear.thicknessFactor     = 1.0f;
     clear.attenuationColor    = {0.55f, 0.78f, 0.95f};
-    clear.attenuationDistance = 0.3f;
+    clear.attenuationDistance = 0.22f;
     add(resources, clear, pieceName(PieceSet::Glass, Color::White));
 
     MaterialAsset smoked = clear;
-    smoked.albedo              = {0.08f, 0.09f, 0.12f, 0.82f};
+    smoked.albedo              = {0.07f, 0.08f, 0.11f, 0.9f};
     smoked.attenuationColor    = {0.08f, 0.08f, 0.11f};
     smoked.attenuationDistance = 0.12f;
     add(resources, smoked, pieceName(PieceSet::Glass, Color::Black));
