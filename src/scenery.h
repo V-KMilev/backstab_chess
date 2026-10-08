@@ -22,6 +22,9 @@ class Scenery : public ReflectedBehavior<Scenery> {
         void onStart() override;
         void onUpdate(float dt) override;
 
+        /// How finely the sea is made: 0 low, 1 medium, 2 high.
+        void setDetail(int detail);
+
     private:
         /// Something afloat or adrift, and how it moves: everything here is still at zero.
         struct Drifter {
@@ -54,6 +57,7 @@ class Scenery : public ReflectedBehavior<Scenery> {
         std::vector<Drifter>   m_drifters;
         MeshHandle             m_swell;     ///< The sea's surface, moved every frame.
         std::vector<glm::vec2> m_swellRest; ///< Its vertices' places on the plane.
+        int                    m_detail = 2;
         float                  m_time = 0.0f;
 };
 

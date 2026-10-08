@@ -7,6 +7,8 @@
 
 #include <glm/glm.hpp>
 
+#include "platform/threading/thread_pool.h"
+
 namespace Game::Textures {
 
 namespace {
@@ -67,7 +69,8 @@ uint8_t byte(float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 
 
 TextureAsset colorMap(const std::function<glm::vec3(float, float)>& color) {
     TextureAsset texture = blank(TextureInternalFormat::SRGBA8, TexturePixelFormat::RGBA, 4);
-    for (int y = 0; y < SIZE; ++y) {
+    parallelFor(SIZE, 16, [&](size_t row) {
+        const int y = static_cast<int>(row);
         for (int x = 0; x < SIZE; ++x) {
             const glm::vec3 c = color((static_cast<float>(x) + 0.5f) / SIZE, (static_cast<float>(y) + 0.5f) / SIZE);
             uint8_t* out = &texture.pixelData[static_cast<size_t>((y * SIZE + x) * 4)];
@@ -76,16 +79,17 @@ TextureAsset colorMap(const std::function<glm::vec3(float, float)>& color) {
             out[2] = byte(c.b);
             out[3] = 255;
         }
-    }
+    });
     return texture;
 }
 
 // A normal map from a height field, by its slope between neighbours, @p strength steep.
 TextureAsset normalMap(const std::function<float(float, float)>& height, float strength) {
     std::vector<float> h(static_cast<size_t>(SIZE * SIZE));
-    for (int y = 0; y < SIZE; ++y) {
+    parallelFor(SIZE, 16, [&](size_t row) {
+        const int y = static_cast<int>(row);
         for (int x = 0; x < SIZE; ++x) h[static_cast<size_t>(y * SIZE + x)] = height((x + 0.5f) / SIZE, (y + 0.5f) / SIZE);
-    }
+    });
     const auto at = [&](int x, int y) { return h[static_cast<size_t>(((y + SIZE) % SIZE) * SIZE + (x + SIZE) % SIZE)]; };
     TextureAsset texture = blank(TextureInternalFormat::RG8, TexturePixelFormat::RG, 2);
     for (int y = 0; y < SIZE; ++y) {
@@ -180,7 +184,8 @@ TextureAsset seaColor() {
 
 TextureAsset seaSurface() {
     TextureAsset texture = blank(TextureInternalFormat::RGBA8, TexturePixelFormat::RGBA, 4);
-    for (int y = 0; y < SIZE; ++y) {
+    parallelFor(SIZE, 16, [&](size_t row) {
+        const int y = static_cast<int>(row);
         for (int x = 0; x < SIZE; ++x) {
             const float f   = foam((x + 0.5f) / SIZE, (y + 0.5f) / SIZE);
             uint8_t*    out = &texture.pixelData[static_cast<size_t>((y * SIZE + x) * 4)];
@@ -189,13 +194,14 @@ TextureAsset seaSurface() {
             out[2] = 0;                                // not metal
             out[3] = 255;
         }
-    }
+    });
     return texture;
 }
 
 TextureAsset foamLace() {
     TextureAsset texture = blank(TextureInternalFormat::SRGBA8, TexturePixelFormat::RGBA, 4);
-    for (int y = 0; y < SIZE; ++y) {
+    parallelFor(SIZE, 16, [&](size_t row) {
+        const int y = static_cast<int>(row);
         for (int x = 0; x < SIZE; ++x) {
             const float u    = (x + 0.5f) / SIZE;
             const float v    = (y + 0.5f) / SIZE;
@@ -207,7 +213,7 @@ TextureAsset foamLace() {
             out[0] = out[1] = out[2] = byte(0.88f);
             out[3] = byte(a);
         }
-    }
+    });
     return texture;
 }
 

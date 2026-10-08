@@ -181,10 +181,84 @@ void ChessGame::begin() {
 
 // Before the match: the view circles the table, the day goes by, and the heads wait at their
 // seats.
+std::string ChessGame::overReason() const {
+    if (!m_match) return "";
+    switch (m_match->position().outcome()) {
+        case Chess::Outcome::Checkmate:            return "Checkmate";
+        case Chess::Outcome::Stalemate:            return "Stalemate";
+        case Chess::Outcome::FiftyMoves:           return "Fifty moves without a capture";
+        case Chess::Outcome::Repetition:           return "The same position three times";
+        case Chess::Outcome::InsufficientMaterial: return "Neither side can mate";
+        case Chess::Outcome::Ongoing:              break;
+    }
+    return "";
+}
+
+// Everything the match made goes, the pieces with it, and a fresh set is laid out; the heads
+// stay at their seats, and the view goes back to circling the table.
+void ChessGame::reset() {
+    for (const DrawnPiece& drawn : m_drawn) destroy(drawn.body);
+    for (const Hint& hint : m_hints) destroy(hint.id);
+    for (const Take& take : m_takes) {
+        if (take.effect) destroy(take.effect);
+    }
+    for (const Claim& claim : m_claims) {
+        if (claim.effect) destroy(claim.effect);
+    }
+    if (m_hud) destroy(m_hud);
+    m_hud = {};
+    m_drawn.clear();
+    m_hints.clear();
+    m_choices.clear();
+    m_glides.clear();
+    m_takes.clear();
+    m_claims.clear();
+    m_scoreRows.clear();
+    m_trophies.clear();
+    m_pieces.fill({});
+    m_selected = Chess::NO_SQUARE;
+    m_duelTime = -1.0f;
+    m_botMove.reset();
+    m_match.reset();
+    for (const Seat& seat : m_seats) {
+        seat.avatar->showHead = true;
+        seat.avatar->setHeadVisible(true);
+    }
+    m_viewer = -1;
+    m_travel = 1.0f;
+    m_lapse  = 1.0f;
+    m_dialPainted = -1000.0f;
+    spawnPieces();
+}
+
+void ChessGame::focus(const glm::vec3& eye, const glm::vec3& target) {
+    m_focused  = true;
+    m_focusEye = eye;
+    m_focusAt  = target;
+}
+
 void ChessGame::attract(float dt) {
-    m_orbit += dt * 0.07f;
-    m_eye = {std::sin(m_orbit) * 15.0f, 5.5f + std::sin(m_orbit * 0.6f), std::cos(m_orbit) * 15.0f};
-    Math::toYawPitch(glm::vec3(0.0f, 0.4f, 0.0f) - m_eye, m_yaw, m_pitch);
+    if (m_focused) {
+        // Easing to the held view: a customize screen's close look at its stand.
+        const float ease = 1.0f - std::exp(-dt * 4.0f);
+        m_eye = glm::mix(m_eye, m_focusEye, ease);
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+        Math::toYawPitch(m_focusAt - m_eye, yaw, pitch);
+        m_yaw   += std::remainder(yaw - m_yaw, glm::two_pi<float>()) * ease;
+        m_pitch  = glm::mix(m_pitch, pitch, ease);
+        m_orbit  = std::atan2(m_eye.x, m_eye.z);
+    } else {
+        // Circling the table, picking up from wherever the view is.
+        m_orbit += dt * 0.07f;
+        const glm::vec3 round = {std::sin(m_orbit) * 15.0f, 5.5f + std::sin(m_orbit * 0.6f), std::cos(m_orbit) * 15.0f};
+        m_eye = glm::mix(m_eye, round, 1.0f - std::exp(-dt * 2.0f));
+        float yaw = 0.0f;
+        float pitch = 0.0f;
+        Math::toYawPitch(glm::vec3(0.0f, 0.4f, 0.0f) - m_eye, yaw, pitch);
+        m_yaw   += std::remainder(yaw - m_yaw, glm::two_pi<float>()) * (1.0f - std::exp(-dt * 3.0f));
+        m_pitch  = glm::mix(m_pitch, pitch, 1.0f - std::exp(-dt * 3.0f));
+    }
     if (Transform* view = scene().tryGet<Transform>(findActiveCamera(scene()))) {
         view->rotation = Math::fromYawPitch(m_yaw, m_pitch);
         view->position = m_eye;
@@ -201,6 +275,7 @@ void ChessGame::onUpdate(float dt) {
     }
     advanceGlides(dt);
     advanceTakes(dt);
+    advanceClaims(dt);
     animateHints(dt);
     settleDuel(dt);
     updateCamera(dt);
@@ -211,6 +286,7 @@ void ChessGame::onUpdate(float dt) {
     // A click lands only on the local player's turn, once the last move has and the view has
     // reached the seat. The others' turns are theirs, or a debugging bot's.
     const bool ready = settled() && m_travel >= 1.0f && m_duelTime < 0.0f && m_lapse >= 1.0f && !m_match->over();
+    if (!m_inputEnabled && m_match->current() == m_viewer) return;
     if (!ready) return;
     if (m_match->current() == m_viewer) {
         if (input().pressed(ACTION_SELECT) && !input().pointerOverUI()) click(squareUnderPointer());
@@ -261,25 +337,17 @@ void ChessGame::spawnPlayers() {
         seat.viewYaw   = seat.yaw;
         seat.viewPitch = seat.pitch;
         seat.color = setup.color;
-        seat.skin  = setup.skin;
-        seat.takes = setup.takes;
+        seat.take  = setup.take;
+        seat.claim = setup.claim;
 
-        MaterialAsset ring;
-        ring.type             = MaterialType::Transparent;
-        ring.albedo           = glm::vec4(seat.color, 0.85f);
-        ring.emission         = seat.color;
-        ring.emissiveStrength = 2.0f;
-        ring.roughness        = 0.4f;
-        ring.doubleSided      = true;
-        seat.ring = res.add(std::move(ring), "chess:ring:" + std::to_string(p));
-
-        MaterialAsset beam;
-        beam.type             = MaterialType::Transparent;
-        beam.albedo           = glm::vec4(seat.color, 0.22f);
-        beam.emission         = seat.color;
-        beam.emissiveStrength = 3.0f;
-        beam.doubleSided      = true;
-        seat.beam = res.add(std::move(beam), "chess:beam:" + std::to_string(p));
+        // The player's looks, made as they designed them.
+        const std::string key  = "player:" + std::to_string(p) + ":";
+        const glm::vec3   took = hsv(setup.take.hue, 0.75f, 1.0f);
+        seat.skin   = ChessLook::designed(res, key + "skin", setup.pieces, side);
+        seat.ring   = ChessLook::glowing(res, key + "ring", seat.color, 0.85f, 2.0f);
+        seat.effect = ChessLook::glowing(res, key + "effect", took, 0.22f, 3.0f);
+        seat.ripple = ChessLook::glowing(res, key + "ripple", took, 0.8f, 2.5f);
+        seat.flash  = ChessLook::glowing(res, key + "flash", hsv(setup.claim.hue, 0.6f, 1.0f), 0.95f, 8.0f);
 
         const EntityId head = spawn(setup.name.c_str());
         scene().add(head, Transform{seat.eye, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f)});
@@ -307,7 +375,8 @@ EntityId ChessGame::spawnPiece(Chess::Piece piece, Square square) {
         ? glm::quat(1.0f, 0.0f, 0.0f, 0.0f)
         : glm::angleAxis(glm::pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
     DrawnPiece drawn;
-    drawn.side = piece.color;
+    drawn.side   = piece.color;
+    drawn.facing = facing;
     drawn.body = spawn(ChessLook::pieceMesh(piece.type));
     scene().add(drawn.body, Transform{squareCentre(square), facing, glm::vec3(WORLD_SCALE)});
     scene().add(drawn.body, Mesh{});
@@ -478,6 +547,7 @@ void ChessGame::showChoices(Square square) {
     const bool teammates = m_match->ownerOf(square) >= 0 && m_match->ownerOf(square) != m_match->current();
     mark(square, SQUARE * 0.95f, teammates ? ChessLook::duel(res) : ChessLook::chosen(res), true);
     for (const Chess::Move& move : m_choices) {
+        if (!showHints) break;
         if (move.promotion != PieceType::None && move.promotion != PieceType::Queen) continue;
         const bool  takes = position.takenBy(move) != Chess::NO_SQUARE;
         const bool  duel  = m_match->duelFor(move).has_value();
@@ -644,7 +714,7 @@ void ChessGame::showMove(const Chess::Move& move, const Chess::Position& before)
         glide.victim = m_pieces[idx(taken)];
         glide.taker  = m_match->ownerOf(move.to);  // the match has played it: the mover owns it
         // A squash wants the attacker to come down on it from a hop.
-        if (glide.taker >= 0 && m_seats[static_cast<size_t>(glide.taker)].takes == TakeStyle::Squash) {
+        if (glide.taker >= 0 && m_seats[static_cast<size_t>(glide.taker)].take.style == TakeStyle::Squash) {
             glide.lift = std::max(glide.lift, 0.9f);
         }
         m_pieces[idx(taken)] = {};
@@ -682,7 +752,7 @@ void ChessGame::advanceGlides(float dt) {
         if (Transform* t = scene().tryGet<Transform>(glide.piece)) t->position = at;
 
         // The victim goes as the taker's style says, some way into the move or on landing.
-        const TakeStyle style = glide.taker >= 0 ? m_seats[static_cast<size_t>(glide.taker)].takes : TakeStyle::Float;
+        const TakeStyle style = glide.taker >= 0 ? m_seats[static_cast<size_t>(glide.taker)].take.style : TakeStyle::Float;
         if (glide.victim && glide.t >= takeStart(style)) {
             startTake(glide.victim, glide.taker);
             glide.victim = {};
@@ -706,7 +776,9 @@ void ChessGame::startTake(EntityId piece, int taker) {
     const Seat* seat = taker >= 0 ? &m_seats[static_cast<size_t>(taker)] : nullptr;
     Take take;
     take.piece = piece;
-    take.style = seat ? seat->takes : TakeStyle::Float;
+    take.style   = seat ? seat->take.style : TakeStyle::Float;
+    take.shape   = seat ? TakeShape{seat->take.height, static_cast<int>(std::lround(seat->take.spins))} : TakeShape{};
+    take.seconds = takeSeconds(take.style) / std::max(seat ? seat->take.speed : 1.0f, 0.1f);
     if (const Transform* t = scene().tryGet<Transform>(piece)) {
         take.from   = t->position;
         take.facing = t->rotation;
@@ -719,7 +791,7 @@ void ChessGame::startTake(EntityId piece, int taker) {
         take.effect = spawn("Take Effect");
         scene().add(take.effect, Transform{});
         Mesh drawn{res.findByName<MeshAsset>(effect == TakeEffect::Ripple ? "chess:ring" : "chess:disc"),
-                   effect == TakeEffect::Ripple ? seat->ring : seat->beam};
+                   effect == TakeEffect::Ripple ? seat->ripple : seat->effect};
         drawn.visible     = false;
         drawn.castShadows = false;
         scene().add(take.effect, std::move(drawn));
@@ -729,8 +801,8 @@ void ChessGame::startTake(EntityId piece, int taker) {
 
 void ChessGame::advanceTakes(float dt) {
     for (Take& take : m_takes) {
-        take.t = std::min(take.t + dt / takeSeconds(take.style), 1.0f);
-        const TakePose pose = takePose(take.style, take.t, take.from, take.to);
+        take.t = std::min(take.t + dt / take.seconds, 1.0f);
+        const TakePose pose = takePose(take.style, take.t, take.from, take.to, take.shape);
         if (Transform* t = scene().tryGet<Transform>(take.piece)) {
             t->position = pose.position;
             t->rotation = glm::angleAxis(pose.spin, glm::vec3(0.0f, 1.0f, 0.0f)) * take.facing;
@@ -767,27 +839,91 @@ glm::vec3 ChessGame::trophySpot(int taker) {
 }
 
 // Nothing is moving on the table.
-bool ChessGame::settled() const { return m_glides.empty() && m_takes.empty(); }
+bool ChessGame::settled() const { return m_glides.empty() && m_takes.empty() && m_claims.empty(); }
 
-// A piece nobody owns is the set's own wood; an owned one wears its owner's skin and ring.
+// A piece nobody owns is the set's own wood; an owned one wears its owner's skin and ring. A
+// piece that has changed hands changes into its new owner's look as they designed the change.
 void ChessGame::refreshLooks() {
     ResourceManager& res = resources();
     for (const DrawnPiece& drawn : m_drawn) {
         if (Mesh* ring = scene().tryGet<Mesh>(drawn.ring)) ring->visible = false;
     }
     for (Square s = 0; s < 64; ++s) {
-        const DrawnPiece* drawn = drawnOf(m_pieces[static_cast<size_t>(s)]);
-        if (!m_pieces[static_cast<size_t>(s)] || !drawn) continue;
-        const int            owner = m_match ? m_match->ownerOf(s) : -1;
-        const Seat*          seat  = owner >= 0 ? &m_seats[static_cast<size_t>(owner)] : nullptr;
-        const MaterialHandle skin  = ChessLook::piece(res, seat ? seat->skin : PieceSet::Classic, drawn->side);
-        if (Mesh* body = scene().tryGet<Mesh>(drawn->body)) body->material = skin;
-        if (Mesh* top = scene().tryGet<Mesh>(drawn->top)) top->material = skin;
+        const EntityId body  = m_pieces[static_cast<size_t>(s)];
+        DrawnPiece*    drawn = drawnOf(body);
+        if (!body || !drawn) continue;
+        const int   owner = m_match ? m_match->ownerOf(s) : -1;
+        const Seat* seat  = owner >= 0 ? &m_seats[static_cast<size_t>(owner)] : nullptr;
         if (Mesh* ring = scene().tryGet<Mesh>(drawn->ring); ring && seat) {
             ring->material = seat->ring;
             ring->visible  = true;
         }
+        if (owner != drawn->owner) {
+            const Mesh* worn = scene().tryGet<Mesh>(drawn->body);
+            drawn->owner     = owner;
+            if (seat && seat->claim.style != ClaimStyle::Instant && worn) {
+                m_claims.erase(std::remove_if(m_claims.begin(), m_claims.end(), [&](const Claim& c) { return c.piece == body; }), m_claims.end());
+                m_claims.push_back({body, worn->material, owner, 0.0f, {}});
+                continue;
+            }
+        }
+        const bool claiming = std::any_of(m_claims.begin(), m_claims.end(), [&](const Claim& c) { return c.piece == body; });
+        if (!claiming) setSkin(*drawn, seat ? seat->skin : ChessLook::piece(res, PieceSet::Classic, drawn->side));
     }
+}
+
+void ChessGame::setSkin(DrawnPiece& drawn, MaterialHandle material) {
+    if (Mesh* body = scene().tryGet<Mesh>(drawn.body)) body->material = material;
+    if (Mesh* top = scene().tryGet<Mesh>(drawn.top)) top->material = material;
+}
+
+bool ChessGame::gliding(EntityId piece) const {
+    return std::any_of(m_glides.begin(), m_glides.end(), [&](const Glide& g) { return g.piece == piece; });
+}
+
+Square ChessGame::squareOf(EntityId piece) const {
+    for (Square s = 0; s < 64; ++s) {
+        if (m_pieces[static_cast<size_t>(s)] == piece) return s;
+    }
+    return Chess::NO_SQUARE;
+}
+
+// Each claim plays once its piece has landed: lifting, turning, flashing or rippling as its
+// owner made it, the new skin going on part way.
+void ChessGame::advanceClaims(float dt) {
+    for (Claim& claim : m_claims) {
+        DrawnPiece*  drawn  = drawnOf(claim.piece);
+        const Square square = squareOf(claim.piece);
+        if (!drawn || square == Chess::NO_SQUARE || claim.owner < 0) {
+            claim.t = 1.0f;
+            continue;
+        }
+        if (gliding(claim.piece)) continue;
+        const Seat&       seat = m_seats[static_cast<size_t>(claim.owner)];
+        const ClaimStyle  style = seat.claim.style;
+        claim.t = std::min(claim.t + dt * std::max(seat.claim.speed, 0.1f) / claimSeconds(style), 1.0f);
+        const ClaimPose pose = claimPose(style, claim.t);
+        setSkin(*drawn, pose.flash ? seat.flash : pose.swapped ? seat.skin : claim.from);
+        if (Transform* t = scene().tryGet<Transform>(claim.piece)) {
+            t->position = squareCentre(square) + glm::vec3(0.0f, pose.lift, 0.0f);
+            t->rotation = glm::angleAxis(pose.spin, glm::vec3(0.0f, 1.0f, 0.0f)) * drawn->facing;
+            t->scale    = glm::vec3(WORLD_SCALE * pose.scale);
+        }
+        if (pose.ring > 0.0f && !claim.effect) {
+            claim.effect = spawn("Claim Wave");
+            scene().add(claim.effect, Transform{});
+            Mesh wave{resources().findByName<MeshAsset>("chess:ring"), seat.ripple};
+            wave.castShadows = false;
+            scene().add(claim.effect, std::move(wave));
+        }
+        if (Transform* t = scene().tryGet<Transform>(claim.effect)) {
+            const float r = pose.ring * SQUARE * 0.5f;
+            t->position = squareCentre(square) + glm::vec3(0.0f, 0.008f, 0.0f);
+            t->scale    = {r, 1.0f, r};
+        }
+        if (claim.t >= 1.0f && claim.effect) destroy(claim.effect);
+    }
+    m_claims.erase(std::remove_if(m_claims.begin(), m_claims.end(), [](const Claim& c) { return c.t >= 1.0f; }), m_claims.end());
 }
 
 void ChessGame::updateCamera(float dt) {
@@ -817,11 +953,11 @@ void ChessGame::updateCamera(float dt) {
             m_yaw   = goalY;
             m_pitch = goalP;
         }
-    } else {
+    } else if (m_inputEnabled) {
         if (input().held(ACTION_LOOK)) {
             const glm::vec2 drag = input().pointerDelta();
-            m_yaw   -= drag.x * LOOK_SPEED;
-            m_pitch  = std::clamp(m_pitch - drag.y * LOOK_SPEED, glm::radians(-85.0f), glm::radians(60.0f));
+            m_yaw   -= drag.x * LOOK_SPEED * lookScale;
+            m_pitch  = std::clamp(m_pitch - drag.y * LOOK_SPEED * lookScale, glm::radians(-85.0f), glm::radians(60.0f));
         }
         if (input().pressed(ACTION_SEAT)) {
             m_eye   = seat.eye;
@@ -836,7 +972,7 @@ void ChessGame::updateCamera(float dt) {
             if (!input().held(fly.action)) continue;
             move += fly.along.y != 0.0f ? fly.along : heading * fly.along;
         }
-        if (glm::dot(move, move) > 0.0f) m_eye += glm::normalize(move) * FLY_SPEED * dt;
+        if (glm::dot(move, move) > 0.0f) m_eye += glm::normalize(move) * FLY_SPEED * flyScale * dt;
         m_eye += Math::computeForward(Math::fromYawPitch(m_yaw, m_pitch)) * (input().wheel() * 0.6f);
     }
 
@@ -887,7 +1023,7 @@ void ChessGame::updateAvatars() {
 }
 
 void ChessGame::spawnHud() {
-    const EntityId canvas = spawn("HUD");
+    const EntityId canvas = m_hud = spawn("HUD");
     UICanvas layer;
     layer.sortOrder = 10;
     scene().add(canvas, std::move(layer));

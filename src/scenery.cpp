@@ -85,12 +85,18 @@ void Scenery::onStart() {
     res.add(generateSphere(32, 16), "scenery:ball");
     res.add(generateCube(), "scenery:block");
     res.add(Shapes::ring(0.45f, 48), "scenery:foam_ring");
-    m_swell = res.add(Sea::mesh(m_swellRest), "scenery:swell");
+    m_swell = res.add(Sea::mesh(m_swellRest, m_detail), "scenery:swell");
 
     spawnTable();
     spawnLanterns();
     spawnSea();
     spawnFlotsam();
+}
+
+void Scenery::setDetail(int detail) {
+    MeshAsset sea = Sea::mesh(m_swellRest, detail);
+    if (m_swell) resources().swapValue(m_swell, sea);
+    m_detail = detail;
 }
 
 void Scenery::onUpdate(float dt) {

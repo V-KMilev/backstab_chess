@@ -29,21 +29,24 @@ float backOut(float t) {
     return 1.0f + (S + 1.0f) * u * u * u + S * u * u;
 }
 
-TakePose floatAway(float t, const glm::vec3& from, const glm::vec3& to) {
+float turn(const TakeShape& shape) { return glm::two_pi<float>() * static_cast<float>(shape.turns); }
+
+TakePose floatAway(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
     TakePose pose;
-    pose.position = glm::mix(from, to, smooth(t)) + UP * (1.4f * std::sin(t * glm::pi<float>()));
-    pose.spin     = glm::two_pi<float>() * smooth(t);
+    pose.position = glm::mix(from, to, smooth(t)) + UP * (1.4f * shape.height * std::sin(t * glm::pi<float>()));
+    pose.spin     = turn(shape) * smooth(t);
     return pose;
 }
 
 // Down through the board, a beat out of sight, and up through the table; a ripple spreads
 // from each surface it crosses.
-TakePose sink(float t, const glm::vec3& from, const glm::vec3& to) {
+TakePose sink(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
     TakePose pose;
     const bool  down = t < 0.5f;
     const float u    = down ? phase(t, 0.0f, 0.42f) : phase(t, 0.58f, 1.0f);
-    const float r    = 0.2f + 0.6f * u;
+    const float r    = (0.2f + 0.6f * u) * std::sqrt(shape.height);
     pose.position    = down ? from - UP * (SINK_DEPTH * smooth(u)) : to - UP * (SINK_DEPTH * (1.0f - smooth(u)));
+    pose.spin        = turn(shape) * (down ? smooth(u) : 1.0f);
     pose.showEffect  = u > 0.0f && u < 1.0f;
     pose.effectAt    = (down ? from : to) + UP * 0.008f;
     pose.effectScale = {r, 1.0f, r};
@@ -51,15 +54,15 @@ TakePose sink(float t, const glm::vec3& from, const glm::vec3& to) {
 }
 
 // Up a column of light, shrinking and turning, and down another at the trophies.
-TakePose beam(float t, const glm::vec3& from, const glm::vec3& to) {
+TakePose beam(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
     TakePose pose;
-    const bool  up    = t < 0.5f;
-    const float u     = up ? phase(t, 0.0f, 0.5f) : phase(t, 0.5f, 1.0f);
-    const float lift  = up ? smooth(u) : 1.0f - smooth(u);
+    const bool      up   = t < 0.5f;
+    const float     u    = up ? phase(t, 0.0f, 0.5f) : phase(t, 0.5f, 1.0f);
+    const float     lift = up ? smooth(u) : 1.0f - smooth(u);
     const glm::vec3 base = up ? from : to;
-    pose.position    = base + UP * (BEAM_HEIGHT * lift);
+    pose.position    = base + UP * (BEAM_HEIGHT * shape.height * lift);
     pose.scale       = glm::vec3(glm::mix(1.0f, 0.25f, lift));
-    pose.spin        = glm::two_pi<float>() * (up ? u : 1.0f + u);  // two turns in all
+    pose.spin        = turn(shape) * (up ? u * 0.5f : 0.5f + u * 0.5f);
     // The column opens and closes over each half.
     const float width = 2.0f * COLUMN_RADIUS * std::sqrt(std::sin(u * glm::pi<float>()));
     pose.showEffect  = width > 0.0f;
@@ -69,22 +72,24 @@ TakePose beam(float t, const glm::vec3& from, const glm::vec3& to) {
 }
 
 // Straight up out of sight, spinning, and down onto the trophy spot, settling softly.
-TakePose launch(float t, const glm::vec3& from, const glm::vec3& to) {
-    TakePose pose;
+TakePose launch(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
+    TakePose    pose;
+    const float high = LAUNCH_HEIGHT * shape.height;
     if (t < 0.3f) {
         const float u = phase(t, 0.0f, 0.3f);
-        pose.position = from + UP * (LAUNCH_HEIGHT * u * u);
-        pose.spin     = glm::two_pi<float>() * 3.0f * u;
+        pose.position = from + UP * (high * u * u);
+        pose.spin     = turn(shape) * u;
         return pose;
     }
     // Down out of the sky and settling softly onto its place.
     const float u = phase(t, 0.3f, 1.0f);
-    pose.position = to + UP * (LAUNCH_HEIGHT * std::pow(1.0f - u, 3.0f));
+    pose.position = to + UP * (high * std::pow(1.0f - u, 3.0f));
+    pose.spin     = turn(shape);
     return pose;
 }
 
-// Flattened, held, popped to nothing, and popped back in at the trophies.
-TakePose squash(float t, const glm::vec3& from, const glm::vec3& to) {
+// Flattened, held, popped to nothing, and popped back in at the trophies, twirling.
+TakePose squash(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
     TakePose        pose;
     const glm::vec3 flat = {1.45f, 0.15f, 1.45f};
     if (t < 0.45f) {
@@ -93,8 +98,34 @@ TakePose squash(float t, const glm::vec3& from, const glm::vec3& to) {
         pose.scale    = glm::mix(glm::vec3(1.0f), flat, s) * (1.0f - smooth(phase(t, 0.35f, 0.45f)));
         return pose;
     }
+    const float u = phase(t, 0.45f, 1.0f);
     pose.position = to;
-    pose.scale    = glm::vec3(std::max(backOut(phase(t, 0.45f, 1.0f)), 0.0f));
+    pose.scale    = glm::vec3(std::max(backOut(u), 0.0f));
+    pose.spin     = turn(shape) * smooth(u);
+    return pose;
+}
+
+// Spirals up, shrinking; glides over at the top; and spirals down into its place, growing.
+TakePose vortex(float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
+    TakePose    pose;
+    const float high  = 2.6f * shape.height;
+    const float width = 0.5f;
+    const auto  swirl = [](float a) { return glm::vec3(std::cos(a), 0.0f, std::sin(a)); };
+    if (t < 0.4f) {
+        const float u = smooth(phase(t, 0.0f, 0.4f));
+        pose.position = from + UP * (high * u) + (swirl(u * 3.0f * glm::two_pi<float>()) - swirl(0.0f)) * (width * u);
+        pose.scale    = glm::vec3(glm::mix(1.0f, 0.3f, u));
+    } else if (t < 0.6f) {
+        const float     u   = smooth(phase(t, 0.4f, 0.6f));
+        const glm::vec3 top = (swirl(3.0f * glm::two_pi<float>()) - swirl(0.0f)) * width;
+        pose.position = glm::mix(from + top, to + top, u) + UP * high;
+        pose.scale    = glm::vec3(0.3f);
+    } else {
+        const float u = smooth(phase(t, 0.6f, 1.0f));
+        pose.position = to + UP * (high * (1.0f - u)) + (swirl((1.0f - u) * 3.0f * glm::two_pi<float>()) - swirl(0.0f)) * (width * (1.0f - u));
+        pose.scale    = glm::vec3(glm::mix(0.3f, 1.0f, u));
+    }
+    pose.spin = turn(shape) * smooth(t);
     return pose;
 }
 
@@ -107,6 +138,7 @@ const char* takeStyleName(TakeStyle style) {
         case TakeStyle::Beam:   return "Beam";
         case TakeStyle::Launch: return "Launch";
         case TakeStyle::Squash: return "Squash";
+        case TakeStyle::Vortex: return "Vortex";
         default:                return "";
     }
 }
@@ -117,6 +149,7 @@ float takeSeconds(TakeStyle style) {
         case TakeStyle::Beam:   return 1.8f;
         case TakeStyle::Launch: return 1.4f;
         case TakeStyle::Squash: return 1.0f;
+        case TakeStyle::Vortex: return 1.9f;
         default:                return 1.1f;
     }
 }
@@ -131,14 +164,15 @@ TakeEffect takeEffect(TakeStyle style) {
     }
 }
 
-TakePose takePose(TakeStyle style, float t, const glm::vec3& from, const glm::vec3& to) {
+TakePose takePose(TakeStyle style, float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape) {
     t = std::clamp(t, 0.0f, 1.0f);
     switch (style) {
-        case TakeStyle::Sink:   return sink(t, from, to);
-        case TakeStyle::Beam:   return beam(t, from, to);
-        case TakeStyle::Launch: return launch(t, from, to);
-        case TakeStyle::Squash: return squash(t, from, to);
-        default:                return floatAway(t, from, to);
+        case TakeStyle::Sink:   return sink(t, from, to, shape);
+        case TakeStyle::Beam:   return beam(t, from, to, shape);
+        case TakeStyle::Launch: return launch(t, from, to, shape);
+        case TakeStyle::Squash: return squash(t, from, to, shape);
+        case TakeStyle::Vortex: return vortex(t, from, to, shape);
+        default:                return floatAway(t, from, to, shape);
     }
 }
 

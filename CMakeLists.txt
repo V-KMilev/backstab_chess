@@ -22,3 +22,9 @@ add_executable(takes_tests tests/takes_tests.cpp src/takes.cpp)
 target_include_directories(takes_tests PRIVATE src)
 target_link_libraries(takes_tests PRIVATE vkmEngine::glm-header-only)
 target_compile_features(takes_tests PRIVATE cxx_std_17)
+
+# How a claimed piece changes into its owner's look: each style must end whole, in the new skin.
+add_executable(claims_tests tests/claims_tests.cpp src/claims.cpp src/profile.cpp)
+target_include_directories(claims_tests PRIVATE src)
+target_link_libraries(claims_tests PRIVATE vkmEngine::vkm_core)
+target_compile_features(claims_tests PRIVATE cxx_std_17)

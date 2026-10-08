@@ -9,7 +9,8 @@
 
 #include "chess_game.h"
 #include "chess_look.h"
-#include "lobby.h"
+#include "menu.h"
+#include "showcase.h"
 #include "scenery.h"
 
 VKM_MODULE_ENTRY
@@ -17,7 +18,7 @@ const char* vkmModuleEngineVersion() { return VKM_ENGINE_VERSION; }
 
 VKM_MODULE_ENTRY
 void vkmRegisterBehaviors() {
-    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar, Game::Scenery, Game::Lobby>();
+    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar, Game::Scenery, Game::Menu, Game::Showcase>();
 }
 
 VKM_MODULE_ENTRY
@@ -72,13 +73,17 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
 
     const EntityId world = scene.createEntity();
     scene.add(world, makeName("World"));
-    addBehavior<Game::Scenery>(scene, world);
+    Game::Scenery& scenery = addBehavior<Game::Scenery>(scene, world);
 
     const EntityId game = scene.createEntity();
     scene.add(game, makeName("Chess"));
     Game::ChessGame& chess = addBehavior<Game::ChessGame>(scene, game);
 
-    const EntityId lobby = scene.createEntity();
-    scene.add(lobby, makeName("Lobby"));
-    addBehavior<Game::Lobby>(scene, lobby).setGame(&chess);
+    const EntityId stand = scene.createEntity();
+    scene.add(stand, makeName("Showcase"));
+    Game::Showcase& showcase = addBehavior<Game::Showcase>(scene, stand);
+
+    const EntityId menu = scene.createEntity();
+    scene.add(menu, makeName("Menu"));
+    addBehavior<Game::Menu>(scene, menu).link(&chess, &showcase, &scenery);
 }

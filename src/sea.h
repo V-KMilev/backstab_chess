@@ -24,10 +24,11 @@ glm::vec3 normal(float x, float z, float t);
  * @brief The sea, flat: a disc of rings, close together at the table, wider apart out to
  *        NEAR_RADIUS where the swell dies, and a few more, far apart, out to the horizon.
  *
- * @param rest Filled with each vertex's place on the plane, for shape() to raise.
+ * @param rest   Filled with each vertex's place on the plane, for shape() to raise.
+ * @param detail 0 low, 1 medium, 2 high: how many rings and segments.
  * @return The mesh, to be shaped each frame.
  */
-MeshAsset mesh(std::vector<glm::vec2>& rest);
+MeshAsset mesh(std::vector<glm::vec2>& rest, int detail = 2);
 
 /**
  * @brief Raise @p mesh to the swell @p t seconds in, and slide its ripples on.

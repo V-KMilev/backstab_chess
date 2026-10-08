@@ -6,9 +6,11 @@
 #include <vector>
 
 #include "core/math/random.h"
+#include "platform/threading/thread_pool.h"
 #include "resource/asset/material_asset.h"
 #include "resource/asset/texture_asset.h"
 
+#include "profile.h"
 #include "textures.h"
 
 namespace Game {
@@ -90,27 +92,28 @@ TextureAsset ripples() {
     texture.pixelData.resize(static_cast<size_t>(SIZE * SIZE * 2));
     std::vector<float> dx(static_cast<size_t>(SIZE * SIZE), 0.0f);
     std::vector<float> dy(dx.size(), 0.0f);
-    for (const Wave& w : waves) {
-        // slope = A * 2 pi f * cos(2 pi (fx x + fy y) + phase), split by angle addition.
-        const float cp = std::cos(w.phase);
-        const float sp = std::sin(w.phase);
-        const float* cx = &cosT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
-        const float* sx = &sinT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
-        const float* cy = &cosT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
-        const float* sy = &sinT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
-        for (int y = 0; y < SIZE; ++y) {
+    parallelFor(SIZE, 8, [&](size_t row) {
+        const int y = static_cast<int>(row);
+        float* rowX = &dx[static_cast<size_t>(y * SIZE)];
+        float* rowY = &dy[static_cast<size_t>(y * SIZE)];
+        for (const Wave& w : waves) {
+            // slope = A * 2 pi f * cos(2 pi (fx x + fy y) + phase), split by angle addition.
+            const float  cp = std::cos(w.phase);
+            const float  sp = std::sin(w.phase);
+            const float* cx = &cosT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
+            const float* sx = &sinT[static_cast<size_t>((w.fx + MAX_F) * SIZE)];
+            const float* cy = &cosT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
+            const float* sy = &sinT[static_cast<size_t>((w.fy + MAX_F) * SIZE)];
             // cos(b + phase) and sin(b + phase) for the row's part b = 2 pi fy y.
             const float cb = cy[y] * cp - sy[y] * sp;
             const float sb = sy[y] * cp + cy[y] * sp;
-            float* rowX = &dx[static_cast<size_t>(y * SIZE)];
-            float* rowY = &dy[static_cast<size_t>(y * SIZE)];
             for (int x = 0; x < SIZE; ++x) {
                 const float c = (cx[x] * cb - sx[x] * sb) * w.amplitude;
                 rowX[x] += c * static_cast<float>(w.fx);
                 rowY[x] += c * static_cast<float>(w.fy);
             }
         }
-    }
+    });
     for (size_t i = 0; i < dx.size(); ++i) {
         const glm::vec3 n = glm::normalize(glm::vec3(-dx[i] * 0.35f, -dy[i] * 0.35f, 1.0f));
         texture.pixelData[i * 2 + 0] = static_cast<uint8_t>((n.x * 0.5f + 0.5f) * 255.0f);
@@ -273,6 +276,94 @@ void build(ResourceManager& resources) {
     duel.albedo   = {1.0f, 0.22f, 0.2f, 0.45f};
     duel.emission = {1.0f, 0.22f, 0.2f};
     add(resources, duel, "chess:duel");
+}
+
+// A player's pieces as they designed them, for one side: the side keeps them light or dark, so
+// the board reads whatever anyone picked.
+MaterialAsset designed(ResourceManager& resources, const PieceLook& look, Chess::Color side) {
+    const bool      white = side == Chess::Color::White;
+    const glm::vec3 tint  = hsv(look.hue, look.saturation, 1.0f);
+    const float     smooth = glm::mix(0.65f, 0.04f, look.shine);  // roughness
+    MaterialAsset   m;
+    switch (look.finish) {
+        case Finish::Wood: {
+            m = textured(resources, white ? "pieces_white" : "pieces_black");
+            m.albedo    = glm::vec4(glm::mix(glm::vec3(1.0f), tint, look.saturation * 0.7f), 1.0f);
+            m.metallic  = 0.0f;
+            m.roughness = glm::mix(1.0f, 0.5f, look.shine);
+            m.clearcoat = look.shine * 0.8f;
+            m.clearcoatRoughness = 0.15f;
+            break;
+        }
+        case Finish::Stone: {
+            m.albedoTexture = resources.findByName<TextureAsset>(white ? "chess:marble" : "chess:black_marble");
+            m.normalTexture = resources.findByName<TextureAsset>("chess:stone_normal");
+            m.albedo        = glm::vec4(glm::mix(glm::vec3(1.0f), tint, look.saturation * (white ? 0.6f : 0.9f)), 1.0f);
+            m.roughness     = smooth;
+            m.clearcoat     = look.shine * 0.7f;
+            break;
+        }
+        case Finish::Metal: {
+            m.albedo    = glm::vec4(hsv(look.hue, look.saturation * (white ? 0.75f : 0.6f), white ? 0.95f : 0.22f), 1.0f);
+            m.metallic  = 1.0f;
+            m.roughness = smooth;
+            break;
+        }
+        case Finish::Glass:
+        case Finish::Gem: {
+            const bool gem = look.finish == Finish::Gem;
+            m.type         = MaterialType::Transparent;
+            m.albedo       = white ? glm::vec4(hsv(look.hue, look.saturation * (gem ? 0.9f : 0.4f), 0.95f), gem ? 0.5f : 0.6f)
+                                   : glm::vec4(hsv(look.hue, look.saturation * (gem ? 0.9f : 0.5f), gem ? 0.35f : 0.1f), gem ? 0.7f : 0.85f);
+            m.roughness    = glm::mix(0.3f, 0.02f, look.shine);
+            m.transmission = white ? 0.7f : 0.55f;
+            m.ior          = gem ? 2.2f : 1.6f;
+            m.clearcoat    = gem ? 1.0f : 0.3f;
+            m.thicknessFactor     = 0.8f;
+            m.attenuationColor    = glm::mix(glm::vec3(1.0f), tint, white ? 0.6f : 0.9f) * (white ? 1.0f : 0.15f);
+            m.attenuationDistance = 0.25f;
+            break;
+        }
+        case Finish::Neon:
+        default: {
+            m.albedo           = white ? glm::vec4(0.82f, 0.82f, 0.85f, 1.0f) : glm::vec4(0.04f, 0.04f, 0.05f, 1.0f);
+            m.roughness        = 0.25f;
+            m.clearcoat        = 1.0f;
+            m.emission         = hsv(look.hue, std::max(look.saturation, 0.7f), 1.0f);
+            m.emissiveStrength = 1.5f + 4.0f * look.glow;
+            return m;
+        }
+    }
+    if (look.glow > 0.0f) {
+        m.emission         = tint;
+        m.emissiveStrength = 3.0f * look.glow;
+    }
+    return m;
+}
+
+MaterialHandle designed(ResourceManager& resources, const std::string& name, const PieceLook& look, Chess::Color side) {
+    MaterialAsset material = designed(resources, look, side);
+    // Made again in place: whatever wears it changes with it.
+    if (const MaterialHandle found = resources.findByName<MaterialAsset>(name)) {
+        resources.swapValue(found, material);
+        return found;
+    }
+    return resources.add(std::move(material), name);
+}
+
+MaterialHandle glowing(ResourceManager& resources, const std::string& name, const glm::vec3& color, float alpha, float strength) {
+    MaterialAsset m;
+    m.type             = MaterialType::Transparent;
+    m.albedo           = glm::vec4(color, alpha);
+    m.emission         = color;
+    m.emissiveStrength = strength;
+    m.roughness        = 0.4f;
+    m.doubleSided      = true;
+    if (const MaterialHandle found = resources.findByName<MaterialAsset>(name)) {
+        resources.swapValue(found, m);
+        return found;
+    }
+    return resources.add(std::move(m), name);
 }
 
 MaterialHandle piece(ResourceManager& resources, PieceSet set, Chess::Color side) {

@@ -12,6 +12,7 @@ enum class TakeStyle : int {
     Beam,    ///< Lifted up a column of light, and beamed down at the trophies.
     Launch,  ///< Rockets out of sight, and drops back down to settle softly.
     Squash,  ///< Flattened by the piece landing on it, popped, and popped back in.
+    Vortex,  ///< Spirals up and away, shrinking, and spirals down into its place.
     Count
 };
 
@@ -31,6 +32,12 @@ struct TakePose {
     glm::vec3 effectScale = {1.0f, 1.0f, 1.0f};  ///< The effect mesh's scale, in world units.
 };
 
+/// What a player made of a style: how high it goes and how many turns it makes.
+struct TakeShape {
+    float height = 1.0f;  ///< Times the style's own.
+    int   turns  = 1;     ///< Whole turns, so it lands facing as it did.
+};
+
 /// How long @p style takes, in seconds.
 float takeSeconds(TakeStyle style);
 
@@ -47,8 +54,9 @@ TakeEffect takeEffect(TakeStyle style);
  * @param t     0..1 through takeSeconds(style).
  * @param from  Where it stood on the board.
  * @param to    Its place in the trophy row.
+ * @param shape How high and how many turns, as the taker made it.
  * @return The pose: at @p from, unscaled, at 0; at @p to, unscaled and facing as it did, at 1.
  */
-TakePose takePose(TakeStyle style, float t, const glm::vec3& from, const glm::vec3& to);
+TakePose takePose(TakeStyle style, float t, const glm::vec3& from, const glm::vec3& to, const TakeShape& shape = {});
 
 } // namespace Game

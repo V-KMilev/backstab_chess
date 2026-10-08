@@ -32,11 +32,13 @@ bool wholeTurns(float spin) {
 int main() {
     const glm::vec3 from = {1.0f, 0.17f, -0.5f};
     const glm::vec3 to   = {-3.0f, 0.0f, -3.4f};
-    for (int i = 0; i < static_cast<int>(TakeStyle::Count); ++i) {
-        const TakeStyle style = static_cast<TakeStyle>(i);
-        std::printf("%s:\n", takeStyleName(style));
-        const TakePose start = takePose(style, 0.0f, from, to);
-        const TakePose end   = takePose(style, 1.0f, from, to);
+    for (int i = 0; i < static_cast<int>(TakeStyle::Count) * 2; ++i) {
+        const TakeStyle style = static_cast<TakeStyle>(i % static_cast<int>(TakeStyle::Count));
+        // Each style as it comes, and as a player might shape it: higher, turning three times.
+        const TakeShape shape = i < static_cast<int>(TakeStyle::Count) ? TakeShape{} : TakeShape{2.2f, 3};
+        std::printf("%s%s:\n", takeStyleName(style), shape.turns == 3 ? ", shaped" : "");
+        const TakePose start = takePose(style, 0.0f, from, to, shape);
+        const TakePose end   = takePose(style, 1.0f, from, to, shape);
         check("starts on its square", near(start.position, from));
         check("  whole", near(start.scale, glm::vec3(1.0f)));
         check("ends in the trophy row", near(end.position, to));
@@ -49,7 +51,7 @@ int main() {
         // Never below the board on its own square, but sinking, and never a negative size.
         bool sane = true;
         for (int s = 0; s <= 200; ++s) {
-            const TakePose pose = takePose(style, static_cast<float>(s) / 200.0f, from, to);
+            const TakePose pose = takePose(style, static_cast<float>(s) / 200.0f, from, to, shape);
             sane = sane && pose.scale.x >= 0.0f && pose.scale.y >= 0.0f && pose.scale.z >= 0.0f;
             sane = sane && std::isfinite(pose.position.x) && std::isfinite(pose.position.y);
         }

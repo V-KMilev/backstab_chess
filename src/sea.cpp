@@ -12,10 +12,11 @@ namespace Game::Sea {
 
 namespace {
 
-constexpr int   RINGS     = 120;      ///< Out to NEAR_RADIUS, close together at the table.
+// Rings out to NEAR_RADIUS, close together at the table, and segments round, by detail.
+constexpr int   RING_COUNTS[]    = {56, 88, 120};
+constexpr int   SEGMENT_COUNTS[] = {128, 192, 256};
 constexpr int   FAR_RINGS = 12;       ///< Beyond it, flat, out to the horizon.
 constexpr float HORIZON   = 1200.0f;
-constexpr int   SEGMENTS  = 256;
 constexpr float STEEPNESS = 0.6f;     ///< How far the crests lean together: 0 is a sine, 1 a cusp.
 constexpr float GRAVITY   = 9.81f;
 constexpr float CALM      = 150.0f;   ///< Where the swell begins to die away toward NEAR_RADIUS.
@@ -108,7 +109,10 @@ glm::vec3 normal(float x, float z, float t) {
     return glm::normalize(n);
 }
 
-MeshAsset mesh(std::vector<glm::vec2>& rest) {
+MeshAsset mesh(std::vector<glm::vec2>& rest, int detail) {
+    const int       level    = std::clamp(detail, 0, 2);
+    const int       RINGS    = RING_COUNTS[level];
+    const int       SEGMENTS = SEGMENT_COUNTS[level];
     MeshAsset       sea;
     const glm::vec4 tangent(1.0f, 0.0f, 0.0f, -1.0f);
     rest.clear();
@@ -122,7 +126,7 @@ MeshAsset mesh(std::vector<glm::vec2>& rest) {
         }
     }
     // Ring j to ring j+1, two triangles a segment, wound to face up.
-    const auto at = [](int j, int s) { return static_cast<uint32_t>(j * (SEGMENTS + 1) + s); };
+    const auto at = [SEGMENTS](int j, int s) { return static_cast<uint32_t>(j * (SEGMENTS + 1) + s); };
     for (int j = 0; j < RINGS + FAR_RINGS; ++j) {
         for (int s = 0; s < SEGMENTS; ++s) {
             sea.indices.insert(sea.indices.end(), {at(j, s), at(j + 1, s), at(j, s + 1), at(j, s + 1), at(j + 1, s), at(j + 1, s + 1)});

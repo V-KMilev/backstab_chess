@@ -6,6 +6,10 @@
 #include "chess/position.h"
 
 namespace Game {
+struct PieceLook;
+}
+
+namespace Game {
 
 using namespace Vkm::Engine;
 
@@ -44,6 +48,15 @@ MaterialHandle tile(ResourceManager& resources, bool white);  ///< A board's squ
 MaterialHandle brass(ResourceManager& resources);   ///< The table's rim and foot.
 MaterialHandle glow(ResourceManager& resources);       ///< The ring glowing under the table's rim.
 MaterialHandle lantern(ResourceManager& resources);    ///< The lanterns adrift round the table.
+
+/**
+ * @brief A player's pieces as they designed them, for @p side, under @p name; made again in
+ *        place when it exists, so what wears it changes with it.
+ */
+MaterialHandle designed(ResourceManager& resources, const std::string& name, const PieceLook& look, Chess::Color side);
+
+/// A glowing see-through colour under @p name, made or made again: an effect, a ring, a flash.
+MaterialHandle glowing(ResourceManager& resources, const std::string& name, const glm::vec3& color, float alpha, float strength);
 
 /// The name of the mesh a piece of @p type is drawn with; a bishop's ball is chess:bishop_top.
 const char* pieceMesh(Chess::PieceType type);

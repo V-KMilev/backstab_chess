@@ -10,6 +10,8 @@
 #include "avatar.h"
 #include "chess/match.h"
 #include "chess_look.h"
+#include "claims.h"
+#include "profile.h"
 #include "takes.h"
 
 namespace Game {
@@ -21,8 +23,9 @@ struct PlayerSetup {
     std::string  name;
     Chess::Color side  = Chess::Color::White;
     glm::vec3    color = {1.0f, 1.0f, 1.0f};
-    PieceSet     skin  = PieceSet::Metal;
-    TakeStyle    takes = TakeStyle::Float;
+    PieceLook    pieces;
+    TakeLook     take;
+    ClaimLook    claim;
     bool         local = false;  ///< The player at this screen.
 };
 
@@ -46,13 +49,37 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         /// Starts the match with the players set, white's first to move.
         void begin();
 
+        /// Before the match, holds the view at @p eye looking at @p target, easing there.
+        void focus(const glm::vec3& eye, const glm::vec3& target);
+
+        /// Lets the view circle the table again.
+        void unfocus() { m_focused = false; }
+
         bool started() const { return m_match.has_value(); }
+
+        /// Whether the match has ended.
+        bool over() const { return m_match && m_match->over(); }
+
+        /// The players and their scores, as the match numbers them.
+        std::vector<Chess::Player> results() const { return m_match ? m_match->players() : std::vector<Chess::Player>{}; }
+
+        /// How the match ended, in words.
+        std::string overReason() const;
+
+        /// Ends any match and sets the board out again, for the next.
+        void reset();
+
+        /// Whether the local player's clicks and keys reach the game: off under a menu.
+        void setInputEnabled(bool enabled) { m_inputEnabled = enabled; }
 
     public:
         float moveSeconds  = 0.45f;  ///< How long a piece takes from one square to the next.
         float duelSeconds  = 2.0f;   ///< How long a duel's coin spins.
         float turnSeconds  = 60.0f;  ///< A day or a night: how long a player has to move.
         bool  debugBots    = true;   ///< Play the other seats with a bot, to test alone until there is a network.
+        float lookScale    = 1.0f;   ///< Times the view's turn per pixel dragged.
+        float flyScale     = 1.0f;   ///< Times the view's flying speed.
+        bool  showHints    = true;   ///< Mark where a chosen piece can go.
 
     private:
         /// A piece gliding to its square, and what it takes on the way.
@@ -71,8 +98,10 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         struct Take {
             EntityId  piece;
             EntityId  effect;  ///< The style's ripple or column, if it has one.
-            TakeStyle style = TakeStyle::Float;
-            float     t     = 0.0f;
+            TakeStyle style   = TakeStyle::Float;
+            TakeShape shape;
+            float     seconds = 1.0f;
+            float     t       = 0.0f;
             glm::vec3 from;
             glm::vec3 to;
             glm::quat facing = {1.0f, 0.0f, 0.0f, 0.0f};
@@ -93,7 +122,9 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             EntityId     body;
             EntityId     top;
             EntityId     ring;
-            Chess::Color side = Chess::Color::White;
+            Chess::Color side   = Chess::Color::White;
+            int          owner  = -1;  ///< Whose look it shows.
+            glm::quat    facing = {1.0f, 0.0f, 0.0f, 0.0f};
         };
 
         /// A player's place at the table, and how they look.
@@ -108,10 +139,22 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             float          viewYaw   = 0.0f;
             float          viewPitch = 0.0f;
             glm::vec3      color  = {1.0f, 1.0f, 1.0f};
-            PieceSet       skin   = PieceSet::Classic;
-            TakeStyle      takes  = TakeStyle::Float;  ///< How the pieces they take leave the board.
-            MaterialHandle ring;
-            MaterialHandle beam;
+            TakeLook       take;    ///< How the pieces they take leave the board.
+            ClaimLook      claim;   ///< How the pieces they claim change.
+            MaterialHandle skin;    ///< Their pieces as they designed them, for their side.
+            MaterialHandle ring;    ///< Under what they own, in their colour.
+            MaterialHandle effect;  ///< A take's column of light.
+            MaterialHandle ripple;  ///< A take's ripple, and a claim's wave.
+            MaterialHandle flash;   ///< A claim's flash.
+        };
+
+        /// A piece changing into its new owner's look, once its move has landed.
+        struct Claim {
+            EntityId       piece;
+            MaterialHandle from;    ///< What it wore before.
+            int            owner = -1;
+            float          t     = 0.0f;
+            EntityId       effect;  ///< The wave's ring, while it spreads.
         };
 
         /// A player's line on the scoreboard.
@@ -157,6 +200,10 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void timeOut();
 
         void refreshLooks();
+        void advanceClaims(float dt);
+        void setSkin(DrawnPiece& drawn, MaterialHandle material);
+        bool gliding(EntityId piece) const;
+        Chess::Square squareOf(EntityId piece) const;
         void updateCamera(float dt);
         void updateAvatars();
         void updateHud(float dt);
@@ -166,8 +213,13 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
     private:
         std::optional<Chess::Match> m_match;
+        bool                        m_inputEnabled = true;
+        EntityId                    m_hud;
         std::vector<PlayerSetup>    m_setups;
         float                       m_orbit = 0.0f;  ///< Round the table, before the match.
+        bool                        m_focused = false;
+        glm::vec3                   m_focusEye{0.0f};
+        glm::vec3                   m_focusAt{0.0f};
 
         std::array<EntityId, 64> m_pieces{};  ///< The body of the piece on each square.
         std::vector<DrawnPiece>  m_drawn;     ///< Every piece, captured ones too.
@@ -177,6 +229,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         std::vector<Chess::Move> m_choices;
         std::vector<Glide>       m_glides;
         std::vector<Take>        m_takes;
+        std::vector<Claim>       m_claims;
         std::vector<int>         m_trophies;  ///< How many pieces each player has taken.
         Chess::Square            m_selected = Chess::NO_SQUARE;
 
