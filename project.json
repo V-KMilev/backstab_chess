@@ -1,0 +1,8 @@
+{
+  "engineVersion": "1.0.3",
+  "entryScene": "",
+  "maxPlayers": 10,
+  "name": "backstab_chess",
+  "netPort": 27750,
+  "version": "0.1.0"
+}
