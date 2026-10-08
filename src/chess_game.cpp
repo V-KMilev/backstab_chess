@@ -33,10 +33,28 @@ constexpr float BOARD_HALF  = 0.277f * WORLD_SCALE;
 constexpr float GRAVITY     = 9.81f * WORLD_SCALE;
 
 constexpr const char* ACTION_SELECT = "chess/select";
-constexpr const char* ACTION_ORBIT  = "chess/orbit";
+constexpr const char* ACTION_LOOK   = "chess/look";
+constexpr const char* ACTION_SEAT   = "chess/seat";
 constexpr const char* ACTION_SETS[] = {"chess/set1", "chess/set2", "chess/set3", "chess/set4"};
 
-constexpr float ORBIT_SPEED = 0.006f;  ///< Radians per pixel dragged.
+// The moves, as key and direction: forward, back, left, right, up, down.
+struct Fly {
+    const char* action;
+    int         key;
+    glm::vec3   along;  ///< In the view's own frame: -Z ahead, +X right, +Y up.
+};
+const Fly FLY[] = {
+    {"chess/forward", GLFW_KEY_W, {0.0f, 0.0f, -1.0f}},
+    {"chess/back", GLFW_KEY_S, {0.0f, 0.0f, 1.0f}},
+    {"chess/left", GLFW_KEY_A, {-1.0f, 0.0f, 0.0f}},
+    {"chess/right", GLFW_KEY_D, {1.0f, 0.0f, 0.0f}},
+    {"chess/up", GLFW_KEY_SPACE, {0.0f, 1.0f, 0.0f}},
+    {"chess/down", GLFW_KEY_LEFT_SHIFT, {0.0f, -1.0f, 0.0f}},
+};
+
+constexpr float LOOK_SPEED = 0.005f;  ///< Radians per pixel dragged.
+constexpr float FLY_SPEED  = 4.5f;    ///< Metres a second.
+const glm::vec3 SEAT       = {0.0f, 4.6f, -7.0f};
 
 // Each piece's height and radius in world units, for the body it becomes when knocked off.
 struct Shape {
@@ -86,7 +104,9 @@ float wobble(uint32_t n) {
 void ChessGame::onStart() {
     InputMap& map = input();
     map.define(ACTION_SELECT, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_LEFT, 1.0f}});
-    map.define(ACTION_ORBIT, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_RIGHT, 1.0f}});
+    map.define(ACTION_LOOK, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_RIGHT, 1.0f}});
+    map.define(ACTION_SEAT, {InputBinding{InputSource::Key, GLFW_KEY_F, 1.0f}});
+    for (const Fly& fly : FLY) map.define(fly.action, {InputBinding{InputSource::Key, fly.key, 1.0f}});
     for (int i = 0; i < 4; ++i) map.define(ACTION_SETS[i], {InputBinding{InputSource::Key, GLFW_KEY_1 + i, 1.0f}});
 
     scene().physics().gravity = {0.0f, -GRAVITY, 0.0f};
@@ -108,6 +128,21 @@ void ChessGame::onStart() {
     text.color     = {0.95f, 0.93f, 0.88f, 0.92f};
     scene().add(m_status, std::move(text));
 
+    // You, looking out of your own head, and a demo player across the table.
+    const EntityId me = spawn("You");
+    scene().add(me, Transform{SEAT, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f)});
+    Avatar& mine = addBehavior<Avatar>(scene(), me);
+    mine.color    = {0.25f, 0.6f, 1.0f};
+    mine.showHead = false;
+    m_me = &mine;
+
+    const EntityId ghost = spawn("Ghost");
+    scene().add(ghost, Transform{{0.0f, 3.0f, 6.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(1.0f)});
+    Avatar& other = addBehavior<Avatar>(scene(), ghost);
+    other.color     = {0.95f, 0.35f, 0.75f};
+    other.teamWhite = false;
+    m_ghost = &other;
+
     updateStatus();
     updateCamera(0.0f);
 }
@@ -120,6 +155,7 @@ void ChessGame::onUpdate(float dt) {
 
     advanceGlides(dt);
     updateCamera(dt);
+    updateAvatars(dt);
 
     // A click lands only once the last move has: the board is the position while nothing moves.
     if (m_glides.empty() && input().pressed(ACTION_SELECT) && !input().pointerOverUI()) {
@@ -389,19 +425,60 @@ void ChessGame::applySet() {
 }
 
 void ChessGame::updateCamera(float dt) {
-    (void)dt;
-    if (input().held(ACTION_ORBIT)) {
+    if (input().held(ACTION_LOOK)) {
         const glm::vec2 drag = input().pointerDelta();
-        m_yaw   -= drag.x * ORBIT_SPEED;
-        m_pitch  = std::clamp(m_pitch - drag.y * ORBIT_SPEED, glm::radians(-85.0f), glm::radians(-8.0f));
+        m_yaw   -= drag.x * LOOK_SPEED;
+        m_pitch  = std::clamp(m_pitch - drag.y * LOOK_SPEED, glm::radians(-85.0f), glm::radians(60.0f));
     }
-    m_distance = std::clamp(m_distance * std::pow(0.9f, input().wheel()), 3.5f, 16.0f);
+    if (input().pressed(ACTION_SEAT)) {
+        m_eye   = SEAT;
+        m_yaw   = glm::pi<float>();
+        m_pitch = glm::radians(-25.0f);
+    }
+
+    // Flight is level whatever the view's pitch, so W never dives into the table.
+    const glm::quat heading = glm::angleAxis(m_yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec3 move(0.0f);
+    for (const Fly& fly : FLY) {
+        if (!input().held(fly.action)) continue;
+        move += fly.along.y != 0.0f ? fly.along : heading * fly.along;
+    }
+    if (glm::dot(move, move) > 0.0f) m_eye += glm::normalize(move) * FLY_SPEED * dt;
+    m_eye += Math::computeForward(Math::fromYawPitch(m_yaw, m_pitch)) * (input().wheel() * 0.6f);
+
+    // Kept over the room: above the table, and within reach of the board.
+    m_eye.y = std::clamp(m_eye.y, 0.8f, 10.0f);
+    const glm::vec2 flat(m_eye.x, m_eye.z);
+    const float     reach = glm::length(flat);
+    if (reach > 16.0f) {
+        m_eye.x *= 16.0f / reach;
+        m_eye.z *= 16.0f / reach;
+    }
 
     Transform* view = scene().tryGet<Transform>(findActiveCamera(scene()));
     if (!view) return;
-    const glm::quat orbit = Math::fromYawPitch(m_yaw, m_pitch);
-    view->rotation = orbit;
-    view->position = glm::vec3(0.0f, BOARD_TOP, 0.0f) - Math::computeForward(orbit) * m_distance;
+    view->rotation = Math::fromYawPitch(m_yaw, m_pitch);
+    view->position = m_eye;
+}
+
+void ChessGame::updateAvatars(float dt) {
+    if (m_me) {
+        m_me->setPose(m_eye, Math::fromYawPitch(m_yaw, m_pitch));
+        const Square at = squareUnderPointer();
+        m_me->setPointer(at != Chess::NO_SQUARE, at != Chess::NO_SQUARE ? squareCentre(at) : glm::vec3(0.0f));
+    }
+
+    // The demo player drifts round the far side, watching the board, and points at a new
+    // square now and then.
+    if (m_ghost) {
+        m_ghostTime += dt;
+        const float     a    = glm::pi<float>() * 0.5f + 0.7f * std::sin(m_ghostTime * 0.23f);
+        const glm::vec3 at   = {7.0f * std::cos(a), 3.6f + 0.4f * std::sin(m_ghostTime * 0.4f), 7.0f * std::sin(a)};
+        const glm::vec3 look = squareCentre(m_ghostSquare) - at;
+        m_ghost->setPose(at, Math::lookRotation(look));
+        if (std::fmod(m_ghostTime, 2.2f) < dt) m_ghostSquare = static_cast<int>(std::fabs(wobble(static_cast<uint32_t>(m_ghostTime * 10.0f))) * 63.0f);
+        m_ghost->setPointer(true, squareCentre(m_ghostSquare));
+    }
 }
 
 void ChessGame::updateStatus() {

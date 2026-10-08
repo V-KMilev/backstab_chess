@@ -5,6 +5,7 @@
 
 #include "system/script/behavior_api.h"
 
+#include "avatar.h"
 #include "chess/position.h"
 #include "chess_look.h"
 
@@ -15,8 +16,9 @@ using namespace Vkm::Engine;
 /**
  * @brief One game of chess on the table: the board, its pieces, and the hand that moves them.
  *
- * Click a piece of the side to move to see where it can go, then a square to move it there;
- * right-drag orbits the table and the wheel zooms. Keys 1-4 change what the pieces are made of.
+ * Click a piece of the side to move to see where it can go, then a square to move it there.
+ * WASD flies round the table, Space and Shift up and down, right-drag looks, F sits back down.
+ * Keys 1-4 change what the pieces are made of.
  */
 class ChessGame : public ReflectedBehavior<ChessGame> {
     public:
@@ -60,6 +62,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void advanceGlides(float dt);
         void applySet();
         void updateCamera(float dt);
+        void updateAvatars(float dt);
         void updateStatus();
 
     private:
@@ -73,10 +76,15 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         Chess::Square            m_selected = Chess::NO_SQUARE;
         int                      m_shownSet = -1;
 
-        EntityId m_status;
-        float    m_yaw      = glm::pi<float>();
-        float    m_pitch    = glm::radians(-38.0f);
-        float    m_distance = 8.5f;
+        EntityId  m_status;
+        glm::vec3 m_eye   = {0.0f, 4.6f, -7.0f};
+        float     m_yaw   = glm::pi<float>();
+        float     m_pitch = glm::radians(-25.0f);
+
+        Avatar* m_me    = nullptr;
+        Avatar* m_ghost = nullptr;  ///< A demo player until there are real ones.
+        float   m_ghostTime     = 0.0f;
+        int     m_ghostSquare   = 28;
 };
 
 } // namespace Game

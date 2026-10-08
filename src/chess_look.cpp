@@ -107,9 +107,9 @@ void build(ResourceManager& resources) {
 
     MaterialAsset table;
     table.albedo             = {0.11f, 0.06f, 0.035f, 1.0f};
-    table.roughness          = 0.55f;
-    table.clearcoat          = 0.8f;
-    table.clearcoatRoughness = 0.08f;
+    table.roughness          = 0.6f;
+    table.clearcoat          = 0.5f;
+    table.clearcoatRoughness = 0.35f;  // satin: the lamp spreads into a sheen, not a second bulb
     add(resources, table, "chess:table");
 
     // The hints glow faintly through the board's lacquer, rather than sit on it as decals.

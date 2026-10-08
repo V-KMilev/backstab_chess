@@ -15,7 +15,7 @@ const char* vkmModuleEngineVersion() { return VKM_ENGINE_VERSION; }
 
 VKM_MODULE_ENTRY
 void vkmRegisterBehaviors() {
-    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame>();
+    Vkm::Engine::BehaviorRegistry::get().registerBehaviors<Game::ChessGame, Game::Avatar>();
 }
 
 VKM_MODULE_ENTRY
@@ -70,7 +70,7 @@ void vkmBuildScene(Vkm::Engine::Scene& scene, Vkm::Engine::ResourceManager& reso
     scene.add(camera, makeName("Camera"));
     scene.add(camera, Transform{});
     Camera lens{};
-    lens.fovY = glm::radians(45.0f);
+    lens.fovY = glm::radians(50.0f);
     scene.add(camera, lens);
 
     const EntityId game = scene.createEntity();
