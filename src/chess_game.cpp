@@ -76,7 +76,7 @@ constexpr float CARD_WIDTH    = 470.0f;
 constexpr float CARD_HEIGHT   = 100.0f;
 constexpr float DIAL_SIZE     = 84.0f;
 constexpr int   DIAL_ROWS     = 42;     ///< Strips the disc is drawn in.
-const glm::vec4 SUN_FACE      = {1.0f, 0.78f, 0.28f, 1.0f};
+const glm::vec4 SUN_FACE      = {1.0f, 0.7f, 0.16f, 1.0f};
 const glm::vec4 MOON_FACE     = {0.72f, 0.79f, 0.95f, 1.0f};
 constexpr int   HURRY_SECONDS = 10;
 constexpr float TILE_WIDTH    = 270.0f;
@@ -885,12 +885,11 @@ void ChessGame::spawnHud() {
     const auto mark = [&](const glm::vec2& at, float size, const glm::vec4& color) {
         m_dialMarks.push_back({panel("Dial Mark", dial, centred({radius, radius}, glm::vec2(size)), color, size * 0.5f), at * radius, size});
     };
-    const glm::vec4 ink = {0.35f, 0.18f, 0.05f, 0.9f};
-    mark({-0.3f, -0.62f}, 6.0f, ink);   // eyes
-    mark({0.3f, -0.62f}, 6.0f, ink);
-    mark({-0.2f, -0.36f}, 3.5f, ink);   // smile
-    mark({0.0f, -0.3f}, 3.5f, ink);
-    mark({0.2f, -0.36f}, 3.5f, ink);
+    // A corona of dots round the sun's half, just outside the disc.
+    for (int i = 0; i < 9; ++i) {
+        const float a = glm::radians(-80.0f + 20.0f * static_cast<float>(i));
+        mark(glm::vec2(std::sin(a), -std::cos(a)) * 1.17f, 5.0f, SUN_FACE);
+    }
     const glm::vec4 crater = {0.45f, 0.52f, 0.7f, 0.85f};
     mark({-0.38f, 0.42f}, 10.0f, crater);
     mark({0.3f, 0.62f}, 7.0f, crater);

@@ -38,12 +38,11 @@ MaterialHandle piece(ResourceManager& resources, PieceSet set, Chess::Color side
 
 MaterialHandle board(ResourceManager& resources);   ///< The wooden board, as the set has it.
 MaterialHandle table(ResourceManager& resources);   ///< The lacquered table under it.
-MaterialHandle floor(ResourceManager& resources);   ///< The wet chessboard plain the table stands on.
+MaterialHandle sea(ResourceManager& resources);     ///< The sea the table stands in.
+MaterialHandle wreck(ResourceManager& resources);   ///< Chunks of chessboard afloat on it.
 MaterialHandle brass(ResourceManager& resources);   ///< The table's rim and foot.
-MaterialHandle rock(ResourceManager& resources);    ///< The far mountains.
-MaterialHandle leather(ResourceManager& resources);    ///< The green inlay the board sits on.
-MaterialHandle tileLight(ResourceManager& resources);  ///< A light square torn out of the plain: marble.
-MaterialHandle tileDark(ResourceManager& resources);   ///< A dark one: obsidian.
+MaterialHandle glow(ResourceManager& resources);       ///< The ring glowing under the table's rim.
+MaterialHandle lantern(ResourceManager& resources);    ///< The lanterns adrift round the table.
 
 /// The name of the mesh a piece of @p type is drawn with; a bishop's ball is chess:bishop_top.
 const char* pieceMesh(Chess::PieceType type);

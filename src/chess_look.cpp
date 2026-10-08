@@ -1,6 +1,7 @@
 #include "chess_look.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "resource/asset/material_asset.h"
@@ -35,8 +36,7 @@ MaterialAsset textured(ResourceManager& resources, const char* part) {
     return m;
 }
 
-// Two squares by two of the plain's chessboard, to repeat: pale stone and dark, with a fine
-// seam between them.
+// Two squares by two of a chessboard: pale stone and dark, with a fine seam between them.
 TextureAsset checker() {
     constexpr uint32_t SIZE = 256;
     constexpr uint32_t HALF = SIZE / 2;
@@ -54,13 +54,53 @@ TextureAsset checker() {
             const uint32_t edgeX = std::min(x % HALF, HALF - 1 - x % HALF);
             const uint32_t edgeY = std::min(y % HALF, HALF - 1 - y % HALF);
             const bool     seam  = std::min(edgeX, edgeY) < 2;
-            uint8_t v = light ? 92 : 30;
+            uint8_t v = light ? 205 : 26;
             if (seam) v = 20;
             uint8_t* texel = &texture.pixelData[(y * SIZE + x) * 4];
             texel[0] = v;
             texel[1] = static_cast<uint8_t>(v * 0.97f);
             texel[2] = static_cast<uint8_t>(v * 0.93f);
             texel[3] = 255;
+        }
+    }
+    return texture;
+}
+
+// The sea's ripples, a tangent-space normal map that repeats: a sum of waves whose
+// frequencies are whole numbers across the tile, so its edges meet.
+TextureAsset ripples() {
+    constexpr uint32_t SIZE = 256;
+    struct Wave {
+        float fx, fy, amplitude, phase;
+    };
+    const Wave WAVES[] = {
+        {3, 1, 1.0f, 0.0f}, {-2, 4, 0.7f, 1.7f}, {5, -3, 0.45f, 0.4f}, {-7, -2, 0.3f, 2.9f},
+        {1, 9, 0.22f, 5.1f}, {11, 6, 0.14f, 3.3f}, {-13, 9, 0.1f, 0.9f}, {17, -14, 0.07f, 4.4f},
+    };
+    TextureAsset texture;
+    texture.params.width          = SIZE;
+    texture.params.height         = SIZE;
+    texture.params.internalFormat = TextureInternalFormat::RG8;
+    texture.params.format         = TexturePixelFormat::RG;
+    texture.params.wrapS          = TextureWrapMode::Repeat;
+    texture.params.wrapT          = TextureWrapMode::Repeat;
+    texture.pixelData.resize(SIZE * SIZE * 2);
+    const float tau = 6.28318530718f;
+    for (uint32_t y = 0; y < SIZE; ++y) {
+        for (uint32_t x = 0; x < SIZE; ++x) {
+            const float u = static_cast<float>(x) / SIZE;
+            const float v = static_cast<float>(y) / SIZE;
+            float dx = 0.0f;
+            float dy = 0.0f;
+            for (const Wave& w : WAVES) {
+                const float c = std::cos(tau * (w.fx * u + w.fy * v) + w.phase) * w.amplitude * tau;
+                dx += c * w.fx;
+                dy += c * w.fy;
+            }
+            // The slope, scaled to a gentle tilt, as x and y of a normal.
+            const glm::vec3 n = glm::normalize(glm::vec3(-dx * 0.012f, -dy * 0.012f, 1.0f));
+            texture.pixelData[(y * SIZE + x) * 2 + 0] = static_cast<uint8_t>((n.x * 0.5f + 0.5f) * 255.0f);
+            texture.pixelData[(y * SIZE + x) * 2 + 1] = static_cast<uint8_t>((n.y * 0.5f + 0.5f) * 255.0f);
         }
     }
     return texture;
@@ -147,13 +187,20 @@ void build(ResourceManager& resources) {
     table.clearcoatRoughness = 0.35f;  // satin: the lamp spreads into a sheen, not a second bulb
     add(resources, table, "chess:table");
 
-    // The plain the table stands on: a chessboard to the horizon, under a skin of water that
-    // mirrors the sky.
-    MaterialAsset floor;
-    floor.albedo        = {1.0f, 1.0f, 1.0f, 1.0f};
-    floor.albedoTexture = resources.add(checker(), "chess:checker");
-    floor.roughness     = 0.05f;
-    add(resources, floor, "chess:floor");
+    // The sea: dark and glassy under ripples, a mirror for the sky and what floats on it.
+    MaterialAsset sea;
+    sea.albedo        = {0.01f, 0.03f, 0.04f, 1.0f};
+    sea.roughness     = 0.04f;
+    sea.normalTexture = resources.add(ripples(), "chess:ripples");
+    sea.normalScale   = 0.7f;
+    add(resources, sea, "chess:sea");
+
+    // Wrecked board, a chunk of squares two by two on each face.
+    MaterialAsset wreck;
+    wreck.albedoTexture = resources.add(checker(), "chess:checker");
+    wreck.roughness     = 0.15f;
+    wreck.clearcoat     = 0.6f;
+    add(resources, wreck, "chess:wreck");
 
     MaterialAsset brass;
     brass.albedo    = {0.86f, 0.64f, 0.32f, 1.0f};
@@ -161,19 +208,17 @@ void build(ResourceManager& resources) {
     brass.roughness = 0.28f;
     add(resources, brass, "chess:brass");
 
-    // The leather inlay the board sits on.
-    MaterialAsset leather;
-    leather.albedo         = {0.012f, 0.04f, 0.024f, 1.0f};
-    leather.roughness      = 0.7f;
-    leather.sheenColor     = {0.05f, 0.12f, 0.08f};
-    leather.sheenRoughness = 0.4f;
-    add(resources, leather, "chess:leather");
+    // The glow under the table's rim, and the lanterns adrift round it.
+    MaterialAsset glow;
+    glow.albedo           = {0.0f, 0.0f, 0.0f, 1.0f};
+    glow.emission         = {1.0f, 0.62f, 0.28f};
+    glow.emissiveStrength = 6.0f;
+    add(resources, glow, "chess:glow");
+    MaterialAsset lantern = glow;
+    lantern.emission         = {1.0f, 0.78f, 0.5f};
+    lantern.emissiveStrength = 12.0f;
+    add(resources, lantern, "chess:lantern");
 
-    // The far mountains: dark, rough stone the haze greys.
-    MaterialAsset rock;
-    rock.albedo    = {0.16f, 0.15f, 0.15f, 1.0f};
-    rock.roughness = 0.9f;
-    add(resources, rock, "chess:rock");
 
     // The hints glow faintly through the board's lacquer, rather than sit on it as decals.
     MaterialAsset hint;
@@ -203,12 +248,11 @@ MaterialHandle board(ResourceManager& resources)  { return resources.findByName<
 MaterialHandle table(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:table"); }
 MaterialHandle hint(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:hint"); }
 MaterialHandle chosen(ResourceManager& resources) { return resources.findByName<MaterialAsset>("chess:chosen"); }
-MaterialHandle floor(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:floor"); }
+MaterialHandle sea(ResourceManager& resources)    { return resources.findByName<MaterialAsset>("chess:sea"); }
+MaterialHandle wreck(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:wreck"); }
 MaterialHandle brass(ResourceManager& resources)  { return resources.findByName<MaterialAsset>("chess:brass"); }
-MaterialHandle rock(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:rock"); }
-MaterialHandle leather(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:leather"); }
-MaterialHandle tileLight(ResourceManager& resources) { return piece(resources, PieceSet::Stone, Chess::Color::White); }
-MaterialHandle tileDark(ResourceManager& resources)  { return piece(resources, PieceSet::Stone, Chess::Color::Black); }
+MaterialHandle glow(ResourceManager& resources)      { return resources.findByName<MaterialAsset>("chess:glow"); }
+MaterialHandle lantern(ResourceManager& resources)   { return resources.findByName<MaterialAsset>("chess:lantern"); }
 
 const char* pieceMesh(Chess::PieceType type) {
     switch (type) {
