@@ -10,6 +10,7 @@
 #include "avatar.h"
 #include "chess/match.h"
 #include "chess_look.h"
+#include "takes.h"
 
 namespace Game {
 
@@ -34,22 +35,30 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         int   blackPlayers = 2;
         float moveSeconds  = 0.45f;  ///< How long a piece takes from one square to the next.
         float duelSeconds  = 2.0f;   ///< How long a duel's coin spins.
-        float turnSeconds  = 60.0f;  ///< Sunrise to sunset: how long a player has to move.
+        float turnSeconds  = 60.0f;  ///< A day or a night: how long a player has to move.
 
     private:
-        /// A piece gliding to its square, or a taken one floating off to its taker's trophies.
+        /// A piece gliding to its square, and what it takes on the way.
         struct Glide {
             EntityId         piece;
             glm::vec3        from;
             glm::vec3        to;
-            float            t        = 0.0f;
-            float            seconds  = 0.0f;  ///< How long it takes; 0 for moveSeconds.
-            float            lift     = 0.0f;  ///< How high it arcs, in metres; a knight jumps.
-            float            spin     = 0.0f;  ///< Radians it turns on the way.
-            glm::quat        facing   = {1.0f, 0.0f, 0.0f, 0.0f};
-            EntityId         victim;           ///< Lifted off on arrival.
-            int              taker    = -1;    ///< Whose trophy the victim becomes.
-            Chess::PieceType becomes  = Chess::PieceType::None;
+            float            t       = 0.0f;
+            float            lift    = 0.0f;  ///< How high it arcs, in metres; a knight jumps.
+            EntityId         victim;          ///< Taken, as the taker's style says, near arrival.
+            int              taker   = -1;    ///< Whose trophy the victim becomes.
+            Chess::PieceType becomes = Chess::PieceType::None;
+        };
+
+        /// A taken piece on its way to its taker's trophy row, in the taker's style.
+        struct Take {
+            EntityId  piece;
+            EntityId  effect;  ///< The style's ripple or column, if it has one.
+            TakeStyle style = TakeStyle::Float;
+            float     t     = 0.0f;
+            glm::vec3 from;
+            glm::vec3 to;
+            glm::quat facing = {1.0f, 0.0f, 0.0f, 0.0f};
         };
 
         /// A piece's entities: its body, a bishop's ball, and the ring in its owner's colour.
@@ -68,11 +77,14 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
             float          pitch  = 0.0f;
             glm::vec3      color  = {1.0f, 1.0f, 1.0f};
             PieceSet       skin   = PieceSet::Classic;
+            TakeStyle      takes  = TakeStyle::Float;  ///< How the pieces they take leave the board.
             MaterialHandle ring;
+            MaterialHandle beam;
         };
 
         /// A player's line on the scoreboard.
         struct ScoreRow {
+            EntityId tile;
             EntityId name;
             EntityId points;
         };
@@ -97,11 +109,14 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void startDuel(const std::string& title);
         void settleDuel(float dt);
         void showMove(const Chess::Move& move, const Chess::Position& before);
-        Glide takeAway(EntityId piece, int taker);
         void advanceGlides(float dt);
+        void startTake(EntityId piece, int taker);
+        void advanceTakes(float dt);
+        glm::vec3 trophySpot(int taker);
+        bool settled() const;
 
         void updateSun(float dt);
-        void newDay();
+        void newTurn();
         void timeOut();
 
         void refreshLooks();
@@ -120,6 +135,7 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         std::vector<EntityId>    m_hints;
         std::vector<Chess::Move> m_choices;
         std::vector<Glide>       m_glides;
+        std::vector<Take>        m_takes;
         std::vector<int>         m_trophies;  ///< How many pieces each player has taken.
         Chess::Square            m_selected = Chess::NO_SQUARE;
 
@@ -135,12 +151,33 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
 
         float m_duelTime = -1.0f;  ///< Seconds into the waiting duel; below zero while there is none.
 
-        // Each turn is a day: the sun sets when time is up, and rises again for the next player.
-        float m_day     = 0.0f;  ///< 0 at noon, 1 at sunset.
-        float m_dayFrom = 0.0f;  ///< Where the sun was when it began to rise again.
-        float m_sunrise = 1.0f;  ///< 0..1 through the sun's return to noon.
+        // The sun is the clock: white moves by day, from sunrise to sunset, and black by night,
+        // from sunset to sunrise. An angle round the sky, 0 at sunrise, that only grows.
+        float    m_sun        = 0.0f;
+        float    m_turnStart  = 0.0f;  ///< Where this turn's sun began.
+        float    m_turnEnd    = 0.0f;  ///< Where it ends it.
+        float    m_skipFrom   = 0.0f;  ///< Where the sun was when it hurried on to this turn.
+        float    m_skip       = 1.0f;  ///< 0..1 through that hurry.
+        float    m_skipTime   = 1.0f;  ///< Its length, in seconds: a whole night passes slower.
+        float    m_duelFrom   = 0.0f;  ///< Where the sun was when the duel began.
+        EntityId m_lamp;
 
-        EntityId              m_status;
+        /// A mark on the dial's faces, where it sits with the sun's half on top.
+        struct DialMark {
+            EntityId  id;
+            glm::vec2 at;
+            float     size = 0.0f;
+        };
+
+        // The turn card: a disc, half a sun's face and half a moon's, that turns half round
+        // through each turn; the seconds left in its hub, and beside it whose move it is.
+        std::vector<EntityId> m_dialStrips;  ///< Two a row: the left part and the right.
+        std::vector<DialMark> m_dialMarks;
+        EntityId              m_dialRim;
+        EntityId              m_clockSeconds;
+        EntityId              m_turnName;
+        EntityId              m_turnDetail;
+        float                 m_hudTime = 0.0f;  ///< For the last seconds' pulse.
         EntityId              m_banner;
         EntityId              m_bannerTitle;
         EntityId              m_bannerDetail;

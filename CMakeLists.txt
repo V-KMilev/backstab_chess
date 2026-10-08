@@ -16,3 +16,9 @@ target_compile_features(chess_tests PRIVATE cxx_std_17)
 add_executable(match_tests tests/match_tests.cpp src/chess/match.cpp src/chess/position.cpp)
 target_include_directories(match_tests PRIVATE src)
 target_compile_features(match_tests PRIVATE cxx_std_17)
+
+# The ways a taken piece leaves the board: each must start on its square and end in the trophy row.
+add_executable(takes_tests tests/takes_tests.cpp src/takes.cpp)
+target_include_directories(takes_tests PRIVATE src)
+target_link_libraries(takes_tests PRIVATE vkmEngine::glm-header-only)
+target_compile_features(takes_tests PRIVATE cxx_std_17)
