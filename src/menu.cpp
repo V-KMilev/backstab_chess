@@ -1,6 +1,7 @@
 #include "menu.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <iterator>
 
@@ -137,7 +138,8 @@ void Menu::onStart() {
     syncYou();
     addBot(Color::Black);
     apply();
-    go(Screen::Main);}
+    go(Screen::Main);
+}
 
 void Menu::onUpdate(float dt) {
     m_kit.update(dt);

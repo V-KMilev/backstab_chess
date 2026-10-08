@@ -19,9 +19,10 @@ int captureValue(PieceType type) {
     }
 }
 
-Match::Match(std::vector<Player> players)
-    : m_players(std::move(players)) {
+Match::Match(std::vector<Player> players, const Position& start)
+    : m_position(start), m_players(std::move(players)) {
     m_owner.fill(-1);
+    m_lifePoints.assign(m_players.size(), 0);
     for (size_t i = 0; i < m_players.size(); ++i) {
         m_rota[sideIndex(m_players[i].side)].push_back(static_cast<int>(i));
     }
@@ -63,6 +64,29 @@ void Match::resolveDuel(bool challengerWon) {
     const Duel  duel = *m_duel;
     const Color side = m_position.sideToMove();
     m_duel.reset();
+
+    // A strike: its move is played already, and the side struck at is the one to move.
+    if (duel.kind == DuelKind::Strike) {
+        if (!challengerWon) {
+            m_players[static_cast<size_t>(duel.defender)].score += Points::DUEL_WON;
+            return;
+        }
+        Player& striker = m_players[static_cast<size_t>(duel.challenger)];
+        striker.score += Points::KING_LIFE;
+        m_lifePoints[static_cast<size_t>(duel.challenger)] += Points::KING_LIFE;
+        if (--m_lives[sideIndex(side)] > 0) return;
+        // The king falls: the striker takes every life's points and the mate's.
+        m_fallen = static_cast<int>(sideIndex(side));
+        for (size_t p = 0; p < m_players.size(); ++p) {
+            if (static_cast<int>(p) == duel.challenger) continue;
+            m_players[p].score -= m_lifePoints[p];
+            striker.score      += m_lifePoints[p];
+            m_lifePoints[static_cast<size_t>(duel.challenger)] += m_lifePoints[p];
+            m_lifePoints[p] = 0;
+        }
+        striker.score += Points::CHECKMATE;
+        return;
+    }
 
     if (challengerWon) {
         m_players[static_cast<size_t>(duel.challenger)].score += Points::DUEL_WON;
@@ -112,6 +136,13 @@ void Match::play(int player, const Move& move) {
     if (m_bonus) m_bonus = false;
     else ++m_next[sideIndex(side)];
     handTo(m_position.sideToMove());
+
+    // Check, short of mate, is a strike at the king.
+    const Color struck = m_position.sideToMove();
+    if (m_position.outcome() == Outcome::Ongoing && m_position.inCheck(struck)) {
+        const int owner = ownerOf(m_position.king(struck));
+        m_duel = Duel{player, owner >= 0 ? owner : m_current, move, DuelKind::Strike};
+    }
 }
 
 } // namespace Chess

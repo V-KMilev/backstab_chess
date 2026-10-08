@@ -21,6 +21,7 @@ struct Player {
 enum class DuelKind : uint8_t {
     Teammate,  ///< Moving a piece a teammate owns.
     Capture,   ///< Taking a piece an enemy owns.
+    Strike,    ///< Giving check: a strike at the king, which has lives to lose.
 };
 
 struct Duel {
@@ -42,7 +43,11 @@ namespace Points {
     constexpr int QUEEN     = 9;
     constexpr int CHECKMATE = 15;
     constexpr int DUEL_WON  = 2;
+    constexpr int KING_LIFE = 5;  ///< A life struck off a king.
 }
+
+/// How many lives a king has to lose to strikes before it falls.
+constexpr int KING_LIVES = 3;
 
 /// What taking a piece of @p type is worth.
 int captureValue(PieceType type);
@@ -58,11 +63,16 @@ int captureValue(PieceType type);
  * other colour, so the challenger's colour passes and the defender moves at once, without
  * spending their colour's next turn. A capture that gets its side out of check cannot be
  * dueled. Taking an enemy's piece with a teammate's is both duels, the teammate's first.
+ *
+ * A move that gives check, short of mate, is a strike at the king: a duel against its owner,
+ * or whoever moves for its side next if nobody does. Won, the king loses one of its lives and
+ * the striker scores it; the move stands either way. The striker who takes a king's last life
+ * ends the game and takes every life's points anyone scored, and the mate's.
  */
 class Match {
     public:
-        /// The players, in the order each colour's turns go round them.
-        explicit Match(std::vector<Player> players);
+        /// The players, in the order each colour's turns go round them, from @p start.
+        explicit Match(std::vector<Player> players, const Position& start = Position::start());
 
         const Position&            position() const { return m_position; }
         const std::vector<Player>& players() const { return m_players; }
@@ -83,7 +93,8 @@ class Match {
          * @brief The current player plays @p move, or challenges for it.
          *
          * @param move One of position().legalMoves().
-         * @return Played, Duel (settle it with resolveDuel) or Illegal (nothing changes).
+         * @return Played, Duel (settle it with resolveDuel) or Illegal (nothing changes). A move
+         *         played that gives check leaves a strike waiting: duel() says so.
          */
         Attempt attempt(const Move& move);
 
@@ -94,8 +105,15 @@ class Match {
          */
         void resolveDuel(bool challengerWon);
 
-        /// Whether the game is over: the position's outcome is not Ongoing.
-        bool over() const { return m_position.outcome() != Outcome::Ongoing; }
+        /// Whether the game is over: the position's outcome is not Ongoing, or a king has fallen.
+        bool over() const { return m_fallen >= 0 || m_position.outcome() != Outcome::Ongoing; }
+
+        /// The lives @p side's king has left.
+        int kingLives(Color side) const { return m_lives[side == Color::White ? 0 : 1]; }
+
+        /// Whether a king fell to strikes, and whose.
+        bool kingFell() const { return m_fallen >= 0; }
+        Color fallenSide() const { return m_fallen == 1 ? Color::Black : Color::White; }
 
     private:
         std::optional<Duel> captureDuel(int challenger, const Move& move) const;
@@ -111,6 +129,9 @@ class Match {
         int                   m_current = -1;
         bool                  m_bonus   = false;  ///< The next move is a won defence's, out of turn.
         std::optional<Duel>   m_duel;
+        std::array<int, 2>    m_lives = {KING_LIVES, KING_LIVES};
+        std::vector<int>      m_lifePoints;  ///< Each player's points from kings' lives.
+        int                   m_fallen = -1; ///< The side whose king fell: 0 white, 1 black.
 };
 
 } // namespace Chess

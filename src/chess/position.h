@@ -105,6 +105,9 @@ class Position {
         /// Where the piece @p move takes stands: beside its arrival for en passant; NO_SQUARE for none.
         Square takenBy(const Move& move) const;
 
+        /// Where @p side's king stands, or NO_SQUARE.
+        Square king(Color side) const { return kingOf(side); }
+
         /// Whether @p side's king is attacked.
         bool inCheck(Color side) const;
 

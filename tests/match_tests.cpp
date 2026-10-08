@@ -164,6 +164,50 @@ void testTheMatingPlayerScoresTheWin() {
     check("the player who mated scores it", m.players()[3].score == Points::CHECKMATE);
 }
 
+// A lone queen walks the black king up the board with three checks: Qa8+, Ke7, Qa7+, Ke6, Qa6+.
+const char* STRIKES = "4k3/8/8/8/8/8/8/Q3K3 w - - 0 1";
+
+void testStrikesTakeTheKingsLives() {
+    std::printf("Strikes at the king:\n");
+    {
+        Match m({{"A", Color::White}, {"B", Color::Black}}, *Position::fromFen(STRIKES));
+        check("check is played", play(m, "a1a8") == Attempt::Played);
+        check("  and leaves a strike waiting", m.duel() && m.duel()->kind == DuelKind::Strike);
+        check("  by the checker, against the side to move", m.duel()->challenger == 0 && m.duel()->defender == 1);
+        check("nothing else may move meanwhile", play(m, "e8e7") == Attempt::Illegal);
+        m.resolveDuel(true);
+        check("won, the king loses a life", m.kingLives(Color::Black) == KING_LIVES - 1);
+        check("  worth its points", m.players()[0].score == Points::KING_LIFE);
+        check("  and black moves on", m.current() == 1 && !m.duel());
+        play(m, "e8e7");
+        play(m, "a8a7");
+        m.resolveDuel(false);
+        check("lost, the king keeps its lives", m.kingLives(Color::Black) == KING_LIVES - 1);
+        check("  and the defender scores the duel", m.players()[1].score == Points::DUEL_WON);
+    }
+    {
+        // A and C share white: each life taken is the taker's, till the last takes them all.
+        Match m({{"A", Color::White}, {"B", Color::Black}, {"C", Color::White}}, *Position::fromFen(STRIKES));
+        play(m, "a1a8");   // A strikes
+        m.resolveDuel(true);
+        play(m, "e8e7");   // B
+        play(m, "a8a7");   // C strikes, moving A's queen: a teammate duel first
+        m.resolveDuel(true);
+        check("a teammate's piece checking: the strike follows the duel", m.duel() && m.duel()->kind == DuelKind::Strike);
+        m.resolveDuel(true);
+        check("  C took a life", m.players()[2].score == Points::DUEL_WON + Points::KING_LIFE);
+        play(m, "e7e6");   // B
+        play(m, "a7a6");   // A strikes, the queen C's now: another teammate duel
+        m.resolveDuel(true);
+        m.resolveDuel(true);
+        check("the last life fells the king", m.kingLives(Color::Black) == 0 && m.kingFell() && m.over());
+        check("  black's", m.fallenSide() == Color::Black);
+        check("  its striker takes every life's points and the mate's",
+              m.players()[0].score == Points::DUEL_WON + 3 * Points::KING_LIFE + Points::CHECKMATE);
+        check("  and C keeps only its duel", m.players()[2].score == Points::DUEL_WON);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -172,6 +216,7 @@ int main() {
     testATeammatesPieceIsADuel();
     testTakingAnEnemysPieceIsADuel();
     testTheMatingPlayerScoresTheWin();
+    testStrikesTakeTheKingsLives();
     if (g_failures) {
         std::printf("\n%d FAILURE(S)\n", g_failures);
         return 1;

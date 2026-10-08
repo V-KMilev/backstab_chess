@@ -4,6 +4,7 @@
 
 #include "dial.h"
 #include "shapes.h"
+#include "ui_kit.h"
 #include "world.h"
 
 #include <algorithm>
@@ -122,6 +123,15 @@ float backOut(float t) {
     return 1.0f + (S + 1.0f) * u * u * u + S * u * u;
 }
 
+// Where a duel's needle is, @p t seconds in: 0..1 along its bar, swinging faster and faster.
+float needleAt(float t) { return 0.5f + 0.5f * std::sin(2.4f * t + 0.45f * t * t + 1.2f); }
+
+// How near the middle a needle stopped at @p at: 1 dead centre, 0 at either end.
+float needleScore(float at) { return 1.0f - std::abs(at - 0.5f) * 2.0f; }
+
+constexpr const char* ACTION_DUEL = "chess/duel";
+constexpr float       ZONE        = 0.14f;  ///< The gold zone's share of a needle's bar.
+
 float smooth(float t) { return t * t * (3.0f - 2.0f * t); }
 
 // Sets @p text only when it differs, so an unchanged line is not laid out again.
@@ -136,10 +146,12 @@ void ChessGame::onStart() {
     map.define(ACTION_SELECT, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_LEFT, 1.0f}});
     map.define(ACTION_LOOK, {InputBinding{InputSource::MouseButton, GLFW_MOUSE_BUTTON_RIGHT, 1.0f}});
     map.define(ACTION_SEAT, {InputBinding{InputSource::Key, GLFW_KEY_F, 1.0f}});
+    map.define(ACTION_DUEL, {InputBinding{InputSource::Key, GLFW_KEY_SPACE, 1.0f}});
     for (const Fly& fly : FLY) map.define(fly.action, {InputBinding{InputSource::Key, fly.key, 1.0f}});
 
     resources().add(generateCylinder(0.5f, 1.0f, 40), "chess:disc");
     resources().add(Shapes::ring(0.72f, 48), "chess:ring");
+    resources().add(generateSphere(16, 8), "chess:heart");
 
     spawnTable();
     spawnPieces();
@@ -183,6 +195,7 @@ void ChessGame::begin() {
 // seats.
 std::string ChessGame::overReason() const {
     if (!m_match) return "";
+    if (m_match->kingFell()) return std::string("The ") + (m_match->fallenSide() == Color::White ? "white" : "black") + " king fell to strikes";
     switch (m_match->position().outcome()) {
         case Chess::Outcome::Checkmate:            return "Checkmate";
         case Chess::Outcome::Stalemate:            return "Stalemate";
@@ -215,6 +228,8 @@ void ChessGame::reset() {
     m_claims.clear();
     m_scoreRows.clear();
     m_trophies.clear();
+    m_hearts = {};
+    closeNeedle();
     m_pieces.fill({});
     m_selected = Chess::NO_SQUARE;
     m_duelTime = -1.0f;
@@ -390,6 +405,19 @@ EntityId ChessGame::spawnPiece(Chess::Piece piece, Square square) {
     ring.visible     = false;
     scene().add(drawn.ring, std::move(ring));
 
+    // A king carries its lives over its head: a glowing heart each.
+    if (piece.type == PieceType::King) {
+        auto& hearts = m_hearts[piece.color == Color::White ? 0 : 1];
+        hearts.clear();
+        for (int i = 0; i < Chess::KING_LIVES; ++i) {
+            const EntityId heart = spawn("Life", drawn.body);
+            scene().add(heart, Transform{{0.013f * static_cast<float>(i - 1), 0.113f, 0.0f}, {1.0f, 0.0f, 0.0f, 0.0f}, glm::vec3(0.0075f)});
+            Mesh ball{resources().findByName<MeshAsset>("chess:heart"), ChessLook::glowing(resources(), "chess:life", {1.0f, 0.2f, 0.25f}, 1.0f, 5.0f)};
+            ball.castShadows = false;
+            scene().add(heart, std::move(ball));
+            hearts.push_back(heart);
+        }
+    }
     m_drawn.push_back(drawn);
     setMesh(m_drawn.back(), piece.type);
     return drawn.body;
@@ -575,6 +603,7 @@ void ChessGame::tryMove(const Chess::Move& move) {
         case Chess::Attempt::Played:
             LOG_INFO("%s plays %s", nameOf(player), Chess::Position::toUci(move).c_str());
             showMove(move, before);
+            if (m_match->duel()) startDuel("STRIKE!");  // the move gave check
             break;
         case Chess::Attempt::Duel:
             startDuel("DUEL!");
@@ -591,10 +620,20 @@ void ChessGame::startDuel(const std::string& title) {
 
     clearChoices();
     m_hintTime = 0.0f;
+    std::string detail = nameOf(duel.challenger);
+    if (duel.kind == Chess::DuelKind::Strike) {
+        // The checking piece, and the king it strikes at.
+        const Color struck = position.sideToMove();
+        mark(duel.move.to, SQUARE * 0.95f, ChessLook::chosen(resources()), true);
+        mark(position.king(struck), SQUARE * 0.92f, ChessLook::duel(resources()), true, 0.1f);
+        detail += std::string(" strikes at the ") + (struck == Color::White ? "white" : "black") + " king";
+        showNews(title, detail, duelSeconds, HURRY_COLOR);
+        openNeedle();
+        return;
+    }
     mark(duel.move.from, SQUARE * 0.95f, ChessLook::chosen(resources()), true);
     mark(duel.move.to, SQUARE * 0.92f, ChessLook::duel(resources()), true, 0.1f);
 
-    std::string detail = nameOf(duel.challenger);
     if (duel.kind == Chess::DuelKind::Teammate) {
         detail += std::string(" wants ") + nameOf(duel.defender) + "'s " + pieceName(position.at(duel.move.from).type);
     } else {
@@ -603,13 +642,96 @@ void ChessGame::startDuel(const std::string& title) {
     }
     showNews(title, detail, duelSeconds, HURRY_COLOR);
     LOG_INFO("%s", detail.c_str());
+    openNeedle();
 }
 
 // The coin spins for duelSeconds; the winner's move is played, or the loser's turn handed on.
+// The needles swing; the local duelist stops theirs with a press, a bot at the moment it
+// picked. Once both have, or the time is up, the nearer the middle wins, the defender a tie.
 void ChessGame::settleDuel(float dt) {
     if (m_duelTime < 0.0f || !m_match->duel()) return;
     m_duelTime += dt;
-    if (m_duelTime >= duelSeconds) finishDuel(Math::Random::boolean());
+    bool done = true;
+    for (int i = 0; i < 2; ++i) {
+        float& stop = m_needle.stopAt[static_cast<size_t>(i)];
+        if (stop < 0.0f) {
+            const bool mine = m_needle.players[static_cast<size_t>(i)] == m_viewer && m_inputEnabled;
+            const bool press = mine && (input().pressed(ACTION_DUEL) || (input().pressed(ACTION_SELECT) && !input().pointerOverUI()));
+            const float bot  = m_needle.botAt[static_cast<size_t>(i)];
+            if (press || (!mine && bot >= 0.0f && m_duelTime >= bot)) stop = m_duelTime;
+        }
+        done = done && stop >= 0.0f;
+        const float at = stop >= 0.0f ? needleAt(stop) : needleAt(m_duelTime);
+        if (UIElement* needle = scene().tryGet<UIElement>(m_needle.needle[static_cast<size_t>(i)])) needle->position.x = at * 520.0f - 3.0f;
+        if (UIText* text = scene().tryGet<UIText>(m_needle.result[static_cast<size_t>(i)])) {
+            text->text = stop >= 0.0f ? std::to_string(static_cast<int>(std::lround(needleScore(at) * 100.0f))) : "";
+        }
+    }
+    const bool settled = done && m_duelTime - std::max(m_needle.stopAt[0], m_needle.stopAt[1]) > 0.7f;
+    if (!settled && m_duelTime < duelSeconds) return;
+    const float challenger = m_needle.stopAt[0] >= 0.0f ? needleScore(needleAt(m_needle.stopAt[0])) : 0.0f;
+    const float defender   = m_needle.stopAt[1] >= 0.0f ? needleScore(needleAt(m_needle.stopAt[1])) : 0.0f;
+    finishDuel(challenger > defender);
+}
+
+// The duel's panel along the bottom: a bar for each duelist with its gold middle and needle.
+void ChessGame::openNeedle() {
+    closeNeedle();
+    const Chess::Duel& duel = *m_match->duel();
+    m_needle.players = {duel.challenger, duel.defender};
+    m_needle.stopAt  = {-1.0f, -1.0f};
+    for (int i = 0; i < 2; ++i) {
+        // A bot stops somewhere in the duel's first part, nearer or further from the middle.
+        const bool mine = m_needle.players[static_cast<size_t>(i)] == m_viewer;
+        m_needle.botAt[static_cast<size_t>(i)] = mine ? -1.0f : Math::Random::range(0.8f, std::max(duelSeconds * 0.7f, 1.0f));
+    }
+    if (!m_hud) return;
+    const auto element = [&](const char* name, EntityId parent, UIElement place) {
+        const EntityId id = spawn(name, parent);
+        scene().add(id, std::move(place));
+        return id;
+    };
+    const auto fill = [&](EntityId id, const glm::vec4& color, float corner) {
+        UIImage image;
+        image.color              = color;
+        image.shape.cornerRadius = corner;
+        scene().add(id, std::move(image));
+    };
+    const auto words = [&](EntityId id, const std::string& text, float size, const glm::vec4& color, UIText::Align align) {
+        UIText t;
+        t.text      = text;
+        t.pixelSize = size;
+        t.color     = color;
+        t.align     = align;
+        t.valign    = UIText::VAlign::Middle;
+        scene().add(id, std::move(t));
+    };
+    m_needle.panel = element("Duel", m_hud, UIElement::at({0.5f, 1.0f}, {0.0f, -36.0f}, {900.0f, 200.0f}));
+    fill(m_needle.panel, Ui::GLASS, 24.0f);
+    const bool playing = m_needle.players[0] == m_viewer || m_needle.players[1] == m_viewer;
+    words(element("Duel Title", m_needle.panel, UIElement::at({0.5f, 0.0f}, {0.0f, 14.0f}, {860.0f, 36.0f})),
+          playing ? "Stop your needle in the gold - Space or click" : "The duel: whoever stops nearer the gold wins", 24.0f, HURRY_COLOR,
+          UIText::Align::Center);
+    for (int i = 0; i < 2; ++i) {
+        const float    y   = 64.0f + 64.0f * static_cast<float>(i);
+        const int      who = m_needle.players[static_cast<size_t>(i)];
+        words(element("Duel Name", m_needle.panel, UIElement::at({0.0f, 0.0f}, {28.0f, y}, {200.0f, 44.0f})),
+              who == m_viewer ? "You" : nameOf(who), 26.0f, seatColor(who), UIText::Align::Left);
+        const EntityId bar = element("Duel Bar", m_needle.panel, UIElement::at({0.0f, 0.0f}, {240.0f, y + 15.0f}, {520.0f, 14.0f}));
+        fill(bar, Ui::FIELD, 7.0f);
+        fill(element("Duel Zone", bar, UIElement::at({0.5f, 0.5f}, {0.0f, 0.0f}, {520.0f * ZONE, 14.0f})), Ui::GOLD, 7.0f);
+        m_needle.needle[static_cast<size_t>(i)] = element("Duel Needle", bar, UIElement::at({0.0f, 0.5f}, {0.0f, 0.0f}, {6.0f, 38.0f}));
+        fill(m_needle.needle[static_cast<size_t>(i)], glm::vec4(seatColor(who).r, seatColor(who).g, seatColor(who).b, 1.0f), 3.0f);
+        m_needle.result[static_cast<size_t>(i)] = element("Duel Result", m_needle.panel, UIElement::at({1.0f, 0.0f}, {-28.0f, y}, {90.0f, 44.0f}));
+        words(m_needle.result[static_cast<size_t>(i)], "", 28.0f, HUD_TEXT, UIText::Align::Right);
+    }
+}
+
+void ChessGame::closeNeedle() {
+    if (m_needle.panel) destroy(m_needle.panel);
+    m_needle.panel  = {};
+    m_needle.needle = {};
+    m_needle.result = {};
 }
 
 // A duel is part of its turn, on the turn's clock: a defender who wins plays in what is left
@@ -618,17 +740,33 @@ void ChessGame::finishDuel(bool challengerWon) {
     const Chess::Duel     duel   = *m_match->duel();
     const Chess::Position before = m_match->position();
     m_duelTime = -1.0f;
+    closeNeedle();
     clearChoices();
     m_match->resolveDuel(challengerWon);
 
     const std::string winner = nameOf(challengerWon ? duel.challenger : duel.defender);
     LOG_INFO("%s wins the duel", winner.c_str());
-    if (challengerWon && m_match->duel()) {
+    if (duel.kind == Chess::DuelKind::Strike) {
+        // The move stands; only the king's lives are at stake.
+        showHearts();
+        if (!challengerWon) {
+            showNews(winner + " parries!", "The king keeps its lives", 2.2f, seatColor(duel.defender));
+        } else if (m_match->kingFell()) {
+            showNews("THE KING FALLS!", winner + " takes its last life, and every life's points", 4.0f, GOLD);
+        } else {
+            const int left = m_match->kingLives(before.sideToMove());
+            showNews(winner + " strikes!", "The king has " + std::to_string(left) + (left == 1 ? " life left" : " lives left"), 2.2f,
+                     seatColor(duel.challenger));
+        }
+        return;
+    }
+    if (challengerWon && m_match->duel() && m_match->duel()->kind != Chess::DuelKind::Strike) {
         startDuel(winner + " wins! Duel two");
     } else if (challengerWon) {
         LOG_INFO("%s plays %s", nameOf(duel.challenger), Chess::Position::toUci(duel.move).c_str());
         showNews(winner + " wins!", "and plays the move", 1.8f, seatColor(duel.challenger));
         showMove(duel.move, before);
+        if (m_match->duel()) startDuel("STRIKE!");  // the move gave check
     } else if (duel.kind == Chess::DuelKind::Teammate) {
         showNews(winner + " holds on!", "and plays this turn instead", 2.2f, seatColor(duel.defender));
     } else {
@@ -869,6 +1007,16 @@ void ChessGame::refreshLooks() {
         }
         const bool claiming = std::any_of(m_claims.begin(), m_claims.end(), [&](const Claim& c) { return c.piece == body; });
         if (!claiming) setSkin(*drawn, seat ? seat->skin : ChessLook::piece(res, PieceSet::Classic, drawn->side));
+    }
+}
+
+// The hearts over each king: one lit for each life it has left.
+void ChessGame::showHearts() {
+    for (int side = 0; side < 2; ++side) {
+        const int lives = m_match ? m_match->kingLives(side == 0 ? Color::White : Color::Black) : Chess::KING_LIVES;
+        for (size_t i = 0; i < m_hearts[static_cast<size_t>(side)].size(); ++i) {
+            if (Mesh* heart = scene().tryGet<Mesh>(m_hearts[static_cast<size_t>(side)][i])) heart->visible = static_cast<int>(i) < lives;
+        }
     }
 }
 

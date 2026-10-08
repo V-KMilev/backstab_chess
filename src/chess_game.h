@@ -185,6 +185,9 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         void tryMove(const Chess::Move& move);
         void startDuel(const std::string& title);
         void settleDuel(float dt);
+        void openNeedle();
+        void closeNeedle();
+        void showHearts();
         void finishDuel(bool challengerWon);
         void showMove(const Chess::Move& move, const Chess::Position& before);
         void advanceGlides(float dt);
@@ -248,6 +251,21 @@ class ChessGame : public ReflectedBehavior<ChessGame> {
         float     m_travel    = 1.0f;  ///< 0..1 along the way to the viewer's seat.
 
         float m_duelTime = -1.0f;  ///< Seconds into the waiting duel; below zero while there is none.
+
+        /// A duel's needle game: each duelist stops a swinging needle, and the nearer the middle
+        /// wins. The local player plays theirs; a bot stops at a moment it picks.
+        struct NeedleDuel {
+            std::array<int, 2>      players = {-1, -1};       ///< The challenger, the defender.
+            std::array<float, 2>    stopAt  = {-1.0f, -1.0f}; ///< When each stopped; below zero, not yet.
+            std::array<float, 2>    botAt   = {-1.0f, -1.0f}; ///< When a bot will stop.
+            EntityId                panel;
+            std::array<EntityId, 2> needle{};
+            std::array<EntityId, 2> result{};
+        };
+        NeedleDuel m_needle;
+
+        /// The hearts over each king, a life each: white's, then black's.
+        std::array<std::vector<EntityId>, 2> m_hearts;
 
         // The sun is the clock: white moves by day, from sunrise to sunset, and black by night,
         // from sunset to sunrise. An angle round the sky, 0 at sunrise, that only grows.
